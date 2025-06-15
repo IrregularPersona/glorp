@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Write;
+// use std::fs::File;   // UNUSED FOR NOW
+// use std::io::Write;  // UNUSED FOR NOW
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -23,6 +23,7 @@ pub enum PacketData {
     GameState(GameStateData),
     PlayerSync(PlayerSyncData),
     PlayerInit(PlayerInitData),
+    Health(HealthData),
     Generic(GenericData),
 }
 
@@ -70,8 +71,8 @@ pub struct UpdatePlayersData {
     pub view_angles: ViewAngles,                // first focused player yaw/pitch
     pub momentum_a: f64,                        // speed or momentum stuff (?)
     pub momentum_b: f64,                        // speed or momentum stuff (?)
-    pub focused_player_ping: i32,               // "Position"s player ping ???? WHY 😭😭 
-    pub team_id: i32,                           // Need more context (placeholder name)
+    pub focused_player_ping: i32,               // "Position"s player ping ???? WHY 
+    pub team_id: i32,                           // Need more context (placeholder name for now)
     pub state_flags: PlayerStateFlags,          // Specific State Flags
     pub second_focused_position: Position,      // x, y, z position on map
     pub second_focused_view_angles: ViewAngles, // first focused player yaw/pitch
@@ -79,12 +80,11 @@ pub struct UpdatePlayersData {
 // --- End k packets
 
 // --- START h PACKETS
-#[derive(Debug, Deserialize)]
-pub struct GetHealthData {
-    pub opcode: String,
+#[derive(Debug, Serialize)]
+pub struct HealthData {
     pub curr_health: i32,
-    pub pos_shooter_1: i32,             // No clue between X or Z
-    pub pos_shooter_2: i32,             // No clue between X or Z
+    pub pos_shooter_1: i32,
+    pub pos_shooter_2: i32,
 }
 // --- END h PACKETS
 
@@ -469,6 +469,7 @@ impl PacketParser {
             "chi" => self.parse_chat(packet)?,
             "l" => self.parse_player_sync(packet)?,
             "0" => self.parse_player_init(packet)?,
+            "h" => self.parse_health_data(packet)?,
             _ => PacketData::Generic(GenericData {
                 r#type: opcode.to_string(),
                 name: meaning.clone(),
@@ -514,6 +515,24 @@ impl PacketParser {
         }))
     }
 
+    fn parse_health_data(&self, packet: &[Value]) -> Result<PacketData, String> {
+        if packet.len() < 2 {
+            return Err("Invalid health_data packet length".to_string());
+        }
+
+        let data = packet[1].as_array().ok_or("Invalid health data format")?;
+        
+        if data.len() < 3 {
+            return Err(format!("Insufficient health data length: expected 3, got {}", data.len()));
+        }
+
+        Ok(PacketData::Health(HealthData {
+            curr_health: data[0].as_i64().unwrap_or(0) as i32,
+            pos_shooter_1: data[1].as_i64().unwrap_or(0) as i32,
+            pos_shooter_2: data[2].as_i64().unwrap_or(0) as i32,
+        }))
+    }
+
     fn parse_update_players(&self, packet: &[Value]) -> Result<PacketData, String> {
         if packet.len() < 2 {
             return Err("Invalid update_players packet length".to_string());
@@ -554,7 +573,7 @@ impl PacketParser {
                 y: data[15].as_f64().unwrap_or(0.0),
                 z: data[16].as_f64().unwrap_or(0.0),
             },
-            
+
             second_focused_view_angles: ViewAngles { 
                 yaw: data[17].as_i64().unwrap_or(0) as i32, 
                 pitch: data[18].as_i64().unwrap_or(0) as i32 

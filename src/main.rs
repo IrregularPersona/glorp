@@ -251,7 +251,7 @@ fn main() {
                     let filename = format!("packet_{}.json", timestamp);
                     
                     if !params_ptr.is_null() {
-                        let json_string = unsafe {
+                        let json_string = {
                             let mut len = 0;
                             while *params_ptr.add(len) != 0 {
                                 len += 1;
