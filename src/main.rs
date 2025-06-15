@@ -17,6 +17,7 @@ mod config;
 mod constants;
 mod inject;
 mod installer;
+mod packetparser;
 mod utils;
 mod window;
 mod modules {
@@ -230,6 +231,47 @@ fn main() {
         }
 
         let config_clone = Arc::clone(&config);
+        main_window.webview.CallDevToolsProtocolMethod(w!("Network.enable"), w!("{}"), None).unwrap();
+        
+        let ws_receiver = main_window.webview
+            .GetDevToolsProtocolEventReceiver(w!("Network.webSocketFrameReceived"))
+            .unwrap();
+
+        let handler =
+            DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+                if let Some(args) = args {
+                    let mut params_ptr: *mut u16 = std::ptr::null_mut();
+                    let params = &mut params_ptr as *mut *mut u16 as *mut PWSTR;
+                    
+                    args.ParameterObjectAsJson(params)?;
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis();
+                    let filename = format!("packet_{}.json", timestamp);
+                    
+                    if !params_ptr.is_null() {
+                        let json_string = unsafe {
+                            let mut len = 0;
+                            while *params_ptr.add(len) != 0 {
+                                len += 1;
+                            }
+                            
+                            let wide_slice = std::slice::from_raw_parts(params_ptr, len);
+                            String::from_utf16_lossy(wide_slice)
+                        };
+                        
+                        if let Err(e) = packetparser::process_and_save_packet(&json_string, &filename) {
+                            eprintln!("Failed to process packet: {}", e);
+                        }
+                    }
+                }
+                Ok(())
+            }));
+
+        ws_receiver
+            .add_DevToolsProtocolEventReceived(&handler, token)
+            .unwrap();
 
         fn set_cpu_throttling_inmenu(webview: &ICoreWebView2, cfg: &Arc<Mutex<config::Config>>) {
             unsafe {

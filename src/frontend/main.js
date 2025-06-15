@@ -11,7 +11,7 @@ window.glorpClient = {
 };
 
 (async () => {
-	window.glorpClient = await new Promise((resolve) => {
+	window.glorpClient.settings = await new Promise((resolve) => {
 		window.chrome.webview.addEventListener("message", (event) => resolve(event.data), { once: true });
 		window.chrome.webview.postMessage("getInfo");
 	});

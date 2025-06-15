@@ -14,6 +14,9 @@ use windows::{
     },
     core::*,
 };
+use serde::Deserialize;
+use base64::decode;
+
 pub fn create_utf_string(string: &str) -> Vec<u16> {
     let mut string_utf: Vec<u16> = string.encode_utf16().collect();
     string_utf.push(0);
@@ -61,6 +64,50 @@ pub fn find_child_window_by_class(parent: HWND, class_name: &str) -> HWND {
         data.0
     }
 }
+
+#[derive(Deserialize)]
+pub struct Response {
+    pub response: InnerResponse,
+}
+
+#[derive(Deserialize)]
+pub struct InnerResponse {
+    pub payloadData: String,
+}
+
+pub fn convertToHex(raw_json: &str) {
+    if raw_json.is_empty() {
+        eprintln!("Error: Empty JSON string");
+        return;
+    }
+    
+    println!("Attempting to parse JSON: {}", raw_json);
+    
+    let parsed = match serde_json::from_str::<Response>(raw_json) {
+        Ok(response) => response,
+        Err(err) => {
+            eprintln!("JSON parsing failed: {}", err);
+            eprintln!("Raw input length: {}", raw_json.len());
+            eprintln!("First 100 chars: {}", &raw_json[..raw_json.len().min(100)]);
+            return;
+        }
+    };
+    
+    let payload = parsed.response.payloadData;
+   
+    match decode(&payload) {
+        Ok(bytes) => {
+            for byte in bytes {
+                print!("{:02X}", byte);
+            }
+            println!();
+        }
+        Err(err) => {
+            eprintln!("Failed to decode base64: {}", err);
+        }
+    }
+}
+
 
 pub fn set_panic_hook() {
     std::panic::set_hook(Box::new(|panic_info| {
