@@ -60,7 +60,6 @@ const automateCompHost = async (params) => {
 	window.createPrivateRoom();
 };
 
-
 const changeRegion = async (region) => {
 	const regionMap = {
 		FRA: "de-fra",
@@ -75,7 +74,6 @@ const changeRegion = async (region) => {
 		ME: "me-bhn",
 	};
 
-	// basic sanitation
 	const normalizedRegion = regionMap[region.toUpperCase()] || region;
 
 	window.showWindow(1);
@@ -100,28 +98,34 @@ const changeRegion = async (region) => {
 		}
 	}
 
-	// cant manually invoke the change handler 
-	// if only you could :(
-	
-	// if (typeof window.setSetting === "function") {
-	// 	window.setSetting("defaultRegion", normalizedRegion);
-	// }
-
 	window.showWindow(1);
 };
 
+// helper to parse query into objects
+const parseQueryString = (str) => {
+    const query = str.includes("?") ? str.split("?")[1] : str;
+    return Object.fromEntries(new URLSearchParams(query).entries());
+};
+
+const pendingParams = sessionStorage.getItem("pendingCompHost");
+if (pendingParams) {
+	sessionStorage.removeItem("pendingCompHost");
+	const params = JSON.parse(pendingParams);
+	await automateCompHost(params);
+}
+
 window.glorp.parseArgs = async (args) => {
-    // log("full args:", args);
     args = args.split(" ");
     for (const arg of args) {
         if (arg.includes("action=host-comp")) {
-            // log("Matched arg:", arg);
-            const url = new URL(arg);
-            const params = Object.fromEntries(url.searchParams.entries());
-            // log("params:", params);
-            // log("region check:", params.region);
-            if (params.region) await changeRegion(params.region);
-            await automateCompHost(params);
+            const params = parseQueryString(arg);	
+            if (params.region) {
+				sessionStorage.setItem("pendingCompHost", JSON.stringify(params));
+				await changeRegion(params.region);
+				window.location.href = "https://krunker.io/";
+			} else {
+				await automateCompHost(params);
+			}
         }
     }
 };
