@@ -118,9 +118,7 @@ window.glorp.parseArgs = async (args) => {
     args = args.split(" ");
     for (const arg of args) {
         if (arg.includes("action=host-comp")) {
-            const params = parseQueryString(arg);
-            // log("params:", params);
-            // log("region check:", params.region);
+            const params = parseQueryString(arg);	
             if (params.region) {
 				sessionStorage.setItem("pendingCompHost", JSON.stringify(params));
 				await changeRegion(params.region);
