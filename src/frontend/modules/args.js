@@ -48,6 +48,7 @@ const automateCompHost = async (params) => {
 
 	const finalTeamSize = teamSizeMap[params.teamSize] || params.teamSize;
 	teamSizeSelect.value = finalTeamSize;
+
 	if (params.webhook) {
 		try {
 			const webhookInput = await waitForElement("#customSwebhook");
@@ -59,17 +60,73 @@ const automateCompHost = async (params) => {
 	window.createPrivateRoom();
 };
 
-window.glorp.parseArgs = (args) => {
-	args = args.split(" ");
-	for (const arg of args) {
-		if (arg.includes("action=host-comp")) {
-			const url = new URL(arg);
-			automateCompHost(Object.fromEntries(url.searchParams.entries()));
+
+const changeRegion = async (region) => {
+	const regionMap = {
+		FRA: "de-fra",
+		SV: "us-ca-sv",
+		SYD: "au-syd",
+		TOK: "jb-hnd",
+		SIN: "sgp",
+		NY: "us-nj",
+		MUM: "as-mb",
+		DAL: "us-tx",
+		BR: "brz",
+		ME: "me-bhn",
+	};
+
+	// basic sanitation
+	const normalizedRegion = regionMap[region.toUpperCase()] || region;
+
+	window.showWindow(1);
+
+	const selectRoot = document.querySelector("select.inputGrey2");
+	if (!selectRoot) {
+		if (typeof window.setSetting === "function") {
+			window.setSetting("defaultRegion", normalizedRegion);
+		}
+		return;
+	}
+
+	const regionValues = Object.values(regionMap);
+	const regionSelect = Array.from(document.querySelectorAll("select.inputGrey2")).find((select) =>
+		Array.from(select.options).some((opt) => regionValues.includes(opt.value))) || selectRoot;
+
+	if (regionSelect && regionSelect.value !== normalizedRegion) {
+		const optionIndex = Array.from(regionSelect.options).findIndex((opt) => opt.value === normalizedRegion);
+		if (optionIndex !== -1) {
+			regionSelect.selectedIndex = optionIndex;
+			regionSelect.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
 		}
 	}
+
+	// cant manually invoke the change handler 
+	// if only you could :(
+	
+	// if (typeof window.setSetting === "function") {
+	// 	window.setSetting("defaultRegion", normalizedRegion);
+	// }
+
+	window.showWindow(1);
 };
 
-window.chrome.webview.addEventListener("message", (event) => {
+window.glorp.parseArgs = async (args) => {
+    // log("full args:", args);
+    args = args.split(" ");
+    for (const arg of args) {
+        if (arg.includes("action=host-comp")) {
+            // log("Matched arg:", arg);
+            const url = new URL(arg);
+            const params = Object.fromEntries(url.searchParams.entries());
+            // log("params:", params);
+            // log("region check:", params.region);
+            if (params.region) await changeRegion(params.region);
+            await automateCompHost(params);
+        }
+    }
+};
+
+window.chrome.webview.addEventListener("message", async (event) => {
 	if (!event.data.args) return;
-	window.glorp.parseArgs(event.data.args);
+	await window.glorp.parseArgs(event.data.args);
 });
