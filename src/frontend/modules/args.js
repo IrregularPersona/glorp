@@ -100,26 +100,15 @@ const changeRegion = async (region) => {
 		}
 	}
 
-	// cant manually invoke the change handler 
-	// if only you could :(
-	
-	// if (typeof window.setSetting === "function") {
-	// 	window.setSetting("defaultRegion", normalizedRegion);
-	// }
-
 	window.showWindow(1);
 };
 
 window.glorp.parseArgs = async (args) => {
-    // log("full args:", args);
     args = args.split(" ");
     for (const arg of args) {
         if (arg.includes("action=host-comp")) {
-            // log("Matched arg:", arg);
             const url = new URL(arg);
             const params = Object.fromEntries(url.searchParams.entries());
-            // log("params:", params);
-            // log("region check:", params.region);
             if (params.region) await changeRegion(params.region);
             await automateCompHost(params);
         }
