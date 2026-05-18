@@ -90,7 +90,7 @@ const changeRegion = async (region) => {
 
 	const regionValues = Object.values(regionMap);
 	const regionSelect = Array.from(document.querySelectorAll("select.inputGrey2")).find((select) =>
-    Array.from(select.options).some((opt) => regionValues.includes(opt.value))) || selectRoot;
+		Array.from(select.options).some((opt) => regionValues.includes(opt.value))) || selectRoot;
 
 	if (regionSelect && regionSelect.value !== normalizedRegion) {
 		const optionIndex = Array.from(regionSelect.options).findIndex((opt) => opt.value === normalizedRegion);
