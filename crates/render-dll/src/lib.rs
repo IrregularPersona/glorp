@@ -40,10 +40,7 @@ fn get_idxgi() -> Result<(IDXGIFactory2, IDXGISwapChain1)> {
             None,
         )?;
 
-        let device = device.ok_or_else(|| {
-            debug_print("D3D11 device creation failed");
-            Error::from_win32()
-        })?;
+        let device = device.unwrap();
 
         let dxgi_device: IDXGIDevice = device.cast()?;
         let dxgi_adapter: IDXGIAdapter = dxgi_device.GetAdapter()?;
