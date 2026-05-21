@@ -46,10 +46,30 @@ const automateCompHost = async (params) => {
 		compSpectators.value = params.spectators;
 	}
 
+	const gunMap = [
+		"ak",
+		"sniper",
+		"smg",
+		"lmg",
+		"shotgun",
+		"rev",
+		"semi",
+		"rpg",
+		"uzi",
+		"runner",
+		"deagler",
+		"crossbow",
+		"famas",
+		"blaster",
+		"survivor",
+		"infiltrator",
+	];
+
 	if (params.classes) {
 		const classes = JSON.parse(params.classes);
-		for (const [gun, limit] of Object.entries(classes)) {
-			const element = await waitForElement(`#customSclassLim${gun}`);
+		for (const [gunName, limit] of Object.entries(classes)) {
+			const id = gunMap.indexOf(gunName);
+			const element = await waitForElement(`#customSclassLim${id}`);
 			element.value = limit;
 		}
 	}
@@ -65,7 +85,7 @@ const automateCompHost = async (params) => {
 			/* */
 		}
 	}
-	// window.createPrivateRoom();
+	window.createPrivateRoom();
 };
 
 const changeRegion = async (region) => {
