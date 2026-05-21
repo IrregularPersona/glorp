@@ -46,6 +46,14 @@ const automateCompHost = async (params) => {
 		compSpectators.value = params.spectators;
 	}
 
+	if (params.classes) {
+		const classes = JSON.parse(params.classes);
+		for (const [gun, limit] of Object.entries(classes)) {
+			const element = await waitForElement(`#customSclassLim${gun}`);
+			element.value = limit;
+		}
+	}
+
 	const finalTeamSize = teamSizeMap[params.teamSize] || params.teamSize;
 	teamSizeSelect.value = finalTeamSize;
 
@@ -57,7 +65,7 @@ const automateCompHost = async (params) => {
 			/* */
 		}
 	}
-	window.createPrivateRoom();
+	// window.createPrivateRoom();
 };
 
 const changeRegion = async (region) => {
@@ -87,8 +95,10 @@ const changeRegion = async (region) => {
 	}
 
 	const regionValues = Object.values(regionMap);
-	const regionSelect = Array.from(document.querySelectorAll("select.inputGrey2")).find((select) =>
-		Array.from(select.options).some((opt) => regionValues.includes(opt.value))) || selectRoot;
+	const regionSelect =
+		Array.from(document.querySelectorAll("select.inputGrey2")).find((select) =>
+			Array.from(select.options).some((opt) => regionValues.includes(opt.value)),
+		) || selectRoot;
 
 	if (regionSelect && regionSelect.value !== normalizedRegion) {
 		const optionIndex = Array.from(regionSelect.options).findIndex((opt) => opt.value === normalizedRegion);
@@ -103,8 +113,8 @@ const changeRegion = async (region) => {
 
 // helper to parse query into objects
 const parseQueryString = (str) => {
-    const query = str.includes("?") ? str.split("?")[1] : str;
-    return Object.fromEntries(new URLSearchParams(query).entries());
+	const query = str.includes("?") ? str.split("?")[1] : str;
+	return Object.fromEntries(new URLSearchParams(query).entries());
 };
 
 const pendingParams = sessionStorage.getItem("pendingCompHost");
@@ -115,19 +125,19 @@ if (pendingParams) {
 }
 
 window.glorp.parseArgs = async (args) => {
-    args = args.split(" ");
-    for (const arg of args) {
-        if (arg.includes("action=host-comp")) {
-            const params = parseQueryString(arg);	
-            if (params.region) {
+	args = args.split(" ");
+	for (const arg of args) {
+		if (arg.includes("action=host-comp")) {
+			const params = parseQueryString(arg);
+			if (params.region) {
 				sessionStorage.setItem("pendingCompHost", JSON.stringify(params));
 				await changeRegion(params.region);
 				window.location.href = "https://krunker.io/";
 			} else {
 				await automateCompHost(params);
 			}
-        }
-    }
+		}
+	}
 };
 
 window.chrome.webview.addEventListener("message", async (event) => {
