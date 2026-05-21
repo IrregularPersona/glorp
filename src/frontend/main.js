@@ -89,6 +89,7 @@ Object.defineProperty(window, "gameLoaded", {
 		if (window.glorp?.settings.data?.accountManager) import("./modules/accountManager.js");
 		if (window.glorp?.settings.data?.showPing) import("./modules/showPing.js");
 		if (window.glorp?.settings.data?.realPing) import("./modules/realPing.js");
+		if (window.glorp?.settings.data?.fpsMonitor) import("./modules/fpsMonitor.js");
 
 		if (window.glorp?.settings.data?.rampBoost && !window.checkCompMode()) {
 			window.chrome.webview.postMessage("toggle-rboost, true");

@@ -19,11 +19,13 @@ mod window;
 mod modules {
     pub mod blocklist;
     pub mod flaglist;
+    pub mod imgui_window;
     pub mod lifecycle;
     pub mod ping;
     pub mod priority;
     pub mod swapper;
     pub mod userscripts;
+    pub mod fps_stats;
 }
 
 static LAUNCH_ARGS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(env::args().skip(1).collect()));
@@ -454,6 +456,7 @@ pub fn create_main_window(env: Option<ICoreWebView2Environment>) -> window::Wind
 
 fn main() {
     modules::lifecycle::register_instance();
+    
     #[cfg(feature = "packaged")]
     {
         modules::lifecycle::set_panic_hook().ok();
@@ -462,6 +465,27 @@ fn main() {
 
     if let Err(e) = init_fs() {
         eprintln!("failed to set all the files in place {}", e);
+    }
+
+    #[cfg(debug_assertions)] 
+    {
+        use modules::fps_stats::FpsStats;
+        use std::sync::{Arc, Mutex};
+        let fps_stats: Arc<Mutex<FpsStats>> = Arc::new(Mutex::new(FpsStats::default()));
+        let fps_for_webview = fps_stats.clone();
+        let fps_for_imgui = fps_stats.clone();
+        
+        webview.on_message(move |msg: String| {
+            if msg == "fps-update" {
+                let _ = webview.PostWebMessageAsString(w!("request-fps"));
+            } else if msg.starts_with("fps-data:") {
+                let data = &msg["fps-data:".len()..];
+                if let Ok(parsed) = serde_json::from_str::<FpsStats>(data) {
+                    *fps_for_webview.lock().unwrap() = parsed;
+                }
+            }
+        });
+        modules::imgui_window::spawn_imgui_window();
     }
 
     let window = create_main_window(None);
