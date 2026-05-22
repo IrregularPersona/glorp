@@ -1,4 +1,4 @@
-use crate::{create_main_window, utils};
+use crate::{app::create_main_window, utils};
 use std::{
     env,
     ffi::c_void,
@@ -466,11 +466,10 @@ unsafe extern "system" fn wnd_proc_setup(hwnd: HWND, msg: u32, wparam: WPARAM, l
             let create_struct = lparam.0 as *const CREATESTRUCTW;
             let is_subwindow = (*create_struct).lpCreateParams as isize;
             WINDOW_COUNT.fetch_add(1, Ordering::SeqCst);
-            #[allow(clippy::fn_to_numeric_cast)]
             let wnd_proc = if is_subwindow == 0 {
-                wnd_proc_main as isize
+                wnd_proc_main as *const () as isize
             } else {
-                wnd_proc_subwindow as isize
+                wnd_proc_subwindow as *const () as isize
             };
 
             SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wnd_proc);

@@ -60,7 +60,15 @@ pub fn check_minor_update() -> Option<String> {
             return None;
         }
     };
-    if semver::Version::parse(&new_ver).unwrap() > parsed_current_ver {
+    let parsed_new_ver = match semver::Version::parse(new_ver.trim()) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("can't parse new version");
+            return None;
+        }
+    };
+
+    if parsed_new_ver > parsed_current_ver {
         let Ok(new_js) = string_download(constants::JS_BUNDLE_URL) else {
             return None;
         };
@@ -85,7 +93,17 @@ pub fn check_major_update() {
         Some(v) => v,
         None => return,
     };
-    if semver::Version::parse(newest_version).unwrap() <= semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap() {
+
+    let parsed_newest = match semver::Version::parse(newest_version.trim()) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let parsed_current = match semver::Version::parse(env!("CARGO_PKG_VERSION")) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    if parsed_newest <= parsed_current {
         return;
     };
 

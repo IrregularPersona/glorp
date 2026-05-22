@@ -112,7 +112,6 @@ fn attach() {
     }
 }
 
-// In create_swapchain_hk, remove the unwrap()
 unsafe extern "system" fn create_swapchain_hk(
     this: *mut c_void,
     pdevice: *mut c_void,

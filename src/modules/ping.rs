@@ -41,9 +41,8 @@ pub fn load(window: &ICoreWebView2) {
             Ok(())
         }));
 
-        ws_receiver
-            .add_DevToolsProtocolEventReceived(&handler, crate::TOKEN)
-            .ok();
+        let mut token = 0i64;
+        ws_receiver.add_DevToolsProtocolEventReceived(&handler, &mut token).ok();
     }
 }
 
