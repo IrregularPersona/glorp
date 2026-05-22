@@ -594,7 +594,7 @@ unsafe extern "system" fn wnd_proc_subwindow(hwnd: HWND, msg: u32, wparam: WPARA
                 if WINDOW_COUNT.load(Ordering::SeqCst) != 1 {
                     return DefWindowProcW(hwnd, msg, wparam, lparam);
                 }
-                let window = create_main_window(Some(window.env.clone()));
+                let window = create_main_window(Some(window.env.clone()), None);
                 let cds_ptr = lparam.0 as *mut COPYDATASTRUCT;
                 let cds = &*cds_ptr;
                 let data = slice::from_raw_parts(cds.lpData as *const u8, cds.cbData as usize);

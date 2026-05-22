@@ -64,9 +64,9 @@ pub fn spawn_imgui_window(fps_stats: Arc<Mutex<FpsStats>>) {
                 // --- FPS window ---
                 let stats = fps_stats.lock().unwrap().clone();
 
-                ui.window("FPS Monitor")
+                imgui::Window::new("FPS Monitor")
                     .size([400.0, 220.0], imgui::Condition::FirstUseEver)
-                    .build(|| {
+                    .build(&ui, || {
                         // Color the FPS value: green > 60, yellow > 30, red otherwise
                         let color = if stats.current >= 60.0 {
                             [0.0, 1.0, 0.3, 1.0]
@@ -89,15 +89,17 @@ pub fn spawn_imgui_window(fps_stats: Arc<Mutex<FpsStats>>) {
                         // Plot the history as a scrolling graph
                         if !stats.history.is_empty() {
                             let overlay = format!("{} fps", stats.current);
-                            ui.plot_lines("##fps_plot", &stats.history)
+                            let (front_slice, _) = stats.history.as_slices();
+                            ui.plot_lines("##fps_plot", front_slice)
                                 .overlay_text(&overlay)
                                 .scale_min(0.0)
-                                .scale_max(144.0) // set to your monitor's max
+                                .scale_max(1000.0) // upper bound for Krunker FPS
                                 .graph_size([380.0, 80.0])
                                 .build();
                         }
                     });
 
+                platform.prepare_render(&ui, display.gl_window().window());
                 let mut target = display.draw();
                 target.clear_color_srgb(0.1, 0.1, 0.1, 1.0);
                 let draw_data = ui.render();

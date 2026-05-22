@@ -1,6 +1,8 @@
 #![cfg_attr(feature = "packaged", windows_subsystem = "windows")]
 use crate::{modules::userscripts, window::WindowState};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
+#[cfg(debug_assertions)]
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     env, fs, io, path, process, result, sync,
@@ -202,7 +204,9 @@ fn set_handlers<T: utils::EnvironmentRef>(webview: &ICoreWebView2, env_wrapper: 
     }
 }
 
-pub fn create_main_window(env: Option<ICoreWebView2Environment>) -> window::Window {
+pub fn create_main_window(
+    env: Option<ICoreWebView2Environment>, fps_stats: Option<Arc<Mutex<modules::fps_stats::FpsStats>>>,
+) -> window::Window {
     let mut webview2_folder: path::PathBuf = env::current_exe().unwrap();
     webview2_folder.pop();
     webview2_folder = webview2_folder.join("WebView2");
@@ -312,6 +316,28 @@ pub fn create_main_window(env: Option<ICoreWebView2Environment>) -> window::Wind
                     let mut message = PWSTR::null();
                     args.TryGetWebMessageAsString(&mut message).ok();
                     let message_string = take_pwstr(message);
+
+                    if message_string.trim_start().starts_with('{') {
+                        if let Some(fps_stats_arc) = fps_stats.as_ref() {
+                            if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&message_string) {
+                                if json_value.get("command").and_then(|c| c.as_str()) == Some("fps-stats") {
+                                    if let Some(data) = json_value.get("data") {
+                                        if let Ok(mut parsed) = serde_json::from_value::<modules::fps_stats::FpsStats>(data.clone()) {
+                                            let mut stats = fps_stats_arc.lock().expect("FPS stats mutex poisoned");
+                                            parsed.history = stats.history.clone();
+                                            parsed.history.push_back(parsed.current);
+                                            if parsed.history.len() > 100 {
+                                                parsed.history.pop_front();
+                                            }
+                                            *stats = parsed;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return Ok(());
+                    }
+
                     let parts: Vec<&str> = message_string.split(", ").map(|s| s.trim()).collect();
                     match parts.first() {
                         Some(&"set-config") => {
@@ -397,6 +423,24 @@ pub fn create_main_window(env: Option<ICoreWebView2Environment>) -> window::Wind
                                 }
                             }
                         }
+                        #[cfg(debug_assertions)]
+                        Some(&"fps-stats") => {
+                            if let Some(fps_stats_arc) = fps_stats.as_ref() {
+                                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&message_string) {
+                                    if let Some(data) = json_value.get("data") {
+                                        if let Ok(mut parsed) = serde_json::from_value::<modules::fps_stats::FpsStats>(data.clone()) {
+                                            let mut stats = fps_stats_arc.lock().expect("FPS stats mutex poisoned");
+                                            parsed.history = stats.history.clone();
+                                            parsed.history.push_back(parsed.current);
+                                            if parsed.history.len() > 100 {
+                                                parsed.history.pop_front();
+                                            }
+                                            *stats = parsed;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Some(&"toggle-rboost") => {
                             let value = parts[1].parse::<bool>().unwrap_or(false);
                             const ENABLED: usize = 1;
@@ -467,28 +511,17 @@ fn main() {
         eprintln!("failed to set all the files in place {}", e);
     }
 
-    #[cfg(debug_assertions)] 
-    {
+    #[cfg(debug_assertions)]
+    let fps_stats = {
         use modules::fps_stats::FpsStats;
         use std::sync::{Arc, Mutex};
-        let fps_stats: Arc<Mutex<FpsStats>> = Arc::new(Mutex::new(FpsStats::default()));
-        let fps_for_webview = fps_stats.clone();
-        let fps_for_imgui = fps_stats.clone();
-        
-        webview.on_message(move |msg: String| {
-            if msg == "fps-update" {
-                let _ = webview.PostWebMessageAsString(w!("request-fps"));
-            } else if msg.starts_with("fps-data:") {
-                let data = &msg["fps-data:".len()..];
-                if let Ok(parsed) = serde_json::from_str::<FpsStats>(data) {
-                    *fps_for_webview.lock().unwrap() = parsed;
-                }
-            }
-        });
-        modules::imgui_window::spawn_imgui_window();
-    }
+        Arc::new(Mutex::new(FpsStats::default()))
+    };
 
-    let window = create_main_window(None);
+    #[cfg(debug_assertions)]
+    modules::imgui_window::spawn_imgui_window(fps_stats.clone());
+
+    let window = create_main_window(None, Some(fps_stats.clone()));
     let (_tx, rx) = sync::mpsc::channel::<String>();
     #[cfg(feature = "packaged")]
     {
