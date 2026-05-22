@@ -92,14 +92,14 @@ impl ChromeWindows {
             PREV_WNDPROC_1 = transmute::<isize, Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>>(
                 original_proc_1,
             );
-            SetWindowLongPtrW(self.chrome_window, GWLP_WNDPROC, wnd_proc_1 as isize);
+            SetWindowLongPtrW(self.chrome_window, GWLP_WNDPROC, wnd_proc_1 as *const () as isize);
 
             // set proc for chrome_renderwidget
             let original_proc_2 = GetWindowLongPtrW(self.chrome_renderwidget, GWLP_WNDPROC);
             PREV_WNDPROC_2 = transmute::<isize, Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>>(
                 original_proc_2,
             );
-            SetWindowLongPtrW(self.chrome_renderwidget, GWLP_WNDPROC, wnd_proc_widget as isize);
+            SetWindowLongPtrW(self.chrome_renderwidget, GWLP_WNDPROC, wnd_proc_widget as *const () as isize);
         }
     }
 
@@ -300,7 +300,7 @@ unsafe extern "system" fn wnd_proc_widget(window: HWND, message: u32, wparam: WP
                 // 1 = change proc to wnd_proc_widget_rampboost
                 // 2 or 0 = allow-drag status
                 if wparam.0 == 1 {
-                    SetWindowLongPtrW(window, GWLP_WNDPROC, wnd_proc_widget_rampboost as isize);
+                    SetWindowLongPtrW(window, GWLP_WNDPROC, wnd_proc_widget_rampboost as *const () as isize);
                 } else {
                     DRAG_STATUS.store(wparam.0 == 2, sync::atomic::Ordering::Relaxed);
                 }
@@ -341,7 +341,7 @@ unsafe extern "system" fn wnd_proc_widget_rampboost(
                 // 3 = change proc to wnd_proc_widget
                 // 2 or 0 = allow-drag status
                 if wparam.0 == 3 {
-                    SetWindowLongPtrW(window, GWLP_WNDPROC, wnd_proc_widget_rampboost as isize);
+                    SetWindowLongPtrW(window, GWLP_WNDPROC, wnd_proc_widget_rampboost as *const () as isize);
                 } else {
                     DRAG_STATUS.store(wparam.0 == 2, sync::atomic::Ordering::Relaxed);
                 }

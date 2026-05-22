@@ -161,6 +161,8 @@ fn set_web_resource_requested_handler(webview: &ICoreWebView2, env: &ICoreWebVie
 }
 
 fn set_new_window_requested_handler(webview: &ICoreWebView2, env: &ICoreWebView2Environment, token: &mut i64) {
+    // let the clone happens outside unsafe.
+    // lets just not have the clone happen inside unsafe xddd
     let env_clone = env.clone();
     unsafe {
         webview
