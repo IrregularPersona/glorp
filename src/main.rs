@@ -30,7 +30,6 @@ static LAUNCH_ARGS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(e
 static CONFIG: LazyLock<Mutex<config::Config>> = LazyLock::new(|| Mutex::new(config::Config::load()));
 static JS_VERSION: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new("0.0.0".to_string()));
 static SCRIPT_ID: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
-static mut TOKEN: *mut i64 = &mut 0i64 as *mut i64;
 
 fn config_bool(setting: &str, default: bool) -> bool {
     CONFIG.lock().unwrap().get(setting).unwrap_or(default)
@@ -291,6 +290,8 @@ fn create_discord_client_if_enabled() -> Arc<Mutex<Option<DiscordIpcClient>>> {
 }
 
 fn load_js_bundle() -> String {
+    // can be ignored
+    #[allow(unused_mut)]
     let mut buf = include_str!("../target/bundle.js").to_string();
 
     #[cfg(feature = "packaged")]

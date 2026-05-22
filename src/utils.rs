@@ -66,10 +66,11 @@ pub fn find_child_window_by_class(parent: HWND, class_name: &str) -> HWND {
             let data = lparam.0 as *mut (HWND, &str);
             let target_class = (*data).1;
             let mut class_name: [u16; 256] = [0; 256];
+            
+            // stop buffer overflow if class name is too long
+            let len = GetClassNameW(handle, &mut class_name) as usize;
 
-            GetClassNameW(handle, &mut class_name);
-
-            let window_class = String::from_utf16_lossy(&class_name);
+            let window_class = String::from_utf16_lossy(&class_name[..len]);
 
             if window_class.contains(target_class) {
                 (*data).0 = handle;
