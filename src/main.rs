@@ -285,7 +285,7 @@ fn create_discord_client_if_enabled() -> Arc<Mutex<Option<DiscordIpcClient>>> {
 }
 
 fn load_js_bundle() -> String {
-    let buf = include_str!("../target/bundle.js").to_string();
+    let mut buf = include_str!("../target/bundle.js").to_string();
 
     #[cfg(feature = "packaged")]
     if let Ok(buffer) = modules::lifecycle::read_js_bundle() {
