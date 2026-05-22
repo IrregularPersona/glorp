@@ -1,5 +1,3 @@
-#![allow(clippy::fn_to_numeric_cast)]
-
 use std::{
     mem,
     mem::transmute,
@@ -84,7 +82,6 @@ impl ChromeWindows {
         }
     }
 
-    #[allow(clippy::fn_to_numeric_cast)]
     unsafe fn set_window_procs(&self) {
         unsafe {
             // set proc for chrome_window
@@ -99,7 +96,11 @@ impl ChromeWindows {
             PREV_WNDPROC_2 = transmute::<isize, Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>>(
                 original_proc_2,
             );
-            SetWindowLongPtrW(self.chrome_renderwidget, GWLP_WNDPROC, wnd_proc_widget as *const () as isize);
+            SetWindowLongPtrW(
+                self.chrome_renderwidget,
+                GWLP_WNDPROC,
+                wnd_proc_widget as *const () as isize,
+            );
         }
     }
 

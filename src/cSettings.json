@@ -42,7 +42,7 @@
 		"description": "it really just loads files from a folder, userscripts is an overstatement",
 		"type": "checkbox",
 		"category": "Main",
-		"defaultValue": false,
+		"defaultValue": true,
 		"button": "Open folder",
 		"buttonAction": "window.chrome.webview.postMessage('open, userscripts')",
 		"needsRestart": true

@@ -115,7 +115,6 @@ fn attach() {
     }
 }
 
-// In create_swapchain_hk, remove the unwrap()
 unsafe extern "system" fn create_swapchain_hk(
     this: *mut c_void,
     pdevice: *mut c_void,
@@ -143,8 +142,7 @@ unsafe extern "system" fn create_swapchain_hk(
             let swap_chain = IDXGISwapChain1::from_raw(*ppswapchain);
             if let Ok(swap_chain2) = swap_chain.cast::<IDXGISwapChain2>() {
                 swap_chain2
-                    // .SetMaximumFrameLatency(1) 
-                    .SetMaximumFrameLatency(2) // could this be a fix to the high fps stutter/freezing issue?
+                    .SetMaximumFrameLatency(1)
                     .unwrap_or_else(|e| debug_print(format!("Failed to set latency: {:?}", e)));
 
                 let waitable_obj = swap_chain2.GetFrameLatencyWaitableObject();

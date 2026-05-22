@@ -1,6 +1,10 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
-use std::{convert, fs, io, mem, path::*};
+use crate::CONFIG;
+use std::{
+    convert, env, fs, io, mem,
+    path::{self, *},
+};
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
 use windows::{
     Win32::{
@@ -58,6 +62,24 @@ pub fn HIWORD(l: usize) -> usize {
     (l >> 16) & 0xffff
 }
 
+pub fn settings_dir() -> path::PathBuf {
+    path::PathBuf::from(env::var("USERPROFILE").unwrap())
+        .join("Documents")
+        .join("glorp")
+}
+
+pub fn config_bool(setting: &str, default: bool) -> bool {
+    CONFIG.lock().unwrap().get(setting).unwrap_or(default)
+}
+
+pub fn config_string(setting: &str, default: impl Into<String>) -> String {
+    CONFIG
+        .lock()
+        .unwrap()
+        .get::<String>(setting)
+        .unwrap_or_else(|| default.into())
+}
+
 pub fn find_child_window_by_class(parent: HWND, class_name: &str) -> HWND {
     let mut data = (HWND::default(), class_name);
 
@@ -66,10 +88,8 @@ pub fn find_child_window_by_class(parent: HWND, class_name: &str) -> HWND {
             let data = lparam.0 as *mut (HWND, &str);
             let target_class = (*data).1;
             let mut class_name: [u16; 256] = [0; 256];
-            
-            // stop buffer overflow if class name is too long
-            let len = GetClassNameW(handle, &mut class_name) as usize;
 
+            let len = GetClassNameW(handle, &mut class_name) as usize;
             let window_class = String::from_utf16_lossy(&class_name[..len]);
 
             if window_class.contains(target_class) {

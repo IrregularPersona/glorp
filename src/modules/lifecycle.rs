@@ -44,7 +44,6 @@ fn string_download(url: &str) -> result::Result<String, ureq::Error> {
     Ok(buf)
 }
 
-// added error handling and version parsing
 pub fn check_minor_update() -> Option<String> {
     let Ok(new_ver) = string_download(constants::JS_VERSION_URL) else {
         return None;
@@ -94,7 +93,7 @@ pub fn check_major_update() {
         Some(v) => v,
         None => return,
     };
-    
+
     let parsed_newest = match semver::Version::parse(newest_version.trim()) {
         Ok(v) => v,
         Err(_) => return,

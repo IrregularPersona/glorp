@@ -40,14 +40,9 @@ pub fn load(window: &ICoreWebView2) {
             }
             Ok(())
         }));
-        
-        // remove reliance on crate::TOKEN
-        // as far as i can tell, this still works without it
-        // im not 100% sure if there are edge cases where it might cause problems
+
         let mut token = 0i64;
-        ws_receiver
-            .add_DevToolsProtocolEventReceived(&handler, &mut token)
-            .ok();
+        ws_receiver.add_DevToolsProtocolEventReceived(&handler, &mut token).ok();
     }
 }
 
