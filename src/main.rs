@@ -42,6 +42,8 @@ fn main() {
     let (_tx, rx) = sync::mpsc::channel::<String>();
     #[cfg(feature = "packaged")]
     {
+        use utils::config_bool;
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
         let main_thread_id = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
         if config_bool("checkUpdates", true) {
             std::thread::spawn(move || {
