@@ -92,18 +92,18 @@ fn init_fs() -> result::Result<(), io::Error> {
 }
 
 fn set_permission_requested_handler(webview: &ICoreWebView2, token: &mut i64) {
+    let handler = PermissionRequestedEventHandler::create(Box::new(
+        move |_, args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
+            if let Some(args) = args {
+                unsafe {
+                    args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW).ok();
+                }
+            }
+            Ok(())
+        },
+    ));
     unsafe {
-        webview
-            .add_PermissionRequested(
-                &PermissionRequestedEventHandler::create(Box::new(
-                    move |_, args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
-                        args.unwrap().SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW).ok();
-                        Ok(())
-                    },
-                )),
-                token,
-            )
-            .ok();
+        webview.add_PermissionRequested(&handler, token).ok();
     }
 }
 
@@ -115,124 +115,130 @@ fn set_web_resource_requested_handler(webview: &ICoreWebView2, env: &ICoreWebVie
         HashMap::new()
     };
 
-    unsafe {
-        webview
-            .add_WebResourceRequested(
-                &WebResourceRequestedEventHandler::create(Box::new(move |webview, args| {
-                    let Some(args) = args else {
-                        return Ok(());
-                    };
-                    let request: ICoreWebView2WebResourceRequest = args.Request()?;
-                    let mut uri = PWSTR::null();
-                    request.Uri(&mut uri)?;
-                    let uri = take_pwstr(uri);
+    let handler = WebResourceRequestedEventHandler::create(Box::new(move |webview, args| {
+        let Some(args) = args else {
+            return Ok(());
+        };
+        let request: ICoreWebView2WebResourceRequest = unsafe { args.Request()? };
+        let mut uri = PWSTR::null();
+        unsafe { request.Uri(&mut uri)? };
+        let uri = take_pwstr(uri);
 
-                    if uri.contains("krunker.io") {
-                        if uri.contains("game-info") || uri.contains("lobby-ranked") {
-                            webview.unwrap().PostWebMessageAsString(w!("game-updated")).ok();
-                            return Ok(());
-                        }
-
-                        let filename: &str = uri
-                            .split("krunker.io/")
-                            .nth(1)
-                            .and_then(|s| s.split('?').next())
-                            .unwrap_or("");
-
-                        if let Some(stream) = swaps.get(filename) {
-                            let response = env_clone.CreateWebResourceResponse(
-                                stream,
-                                200,
-                                w!("OK"),
-                                w!("Access-Control-Allow-Origin: *"),
-                            )?;
-                            args.SetResponse(Some(&response))?;
-                            return Ok(());
-                        }
+        if uri.contains("krunker.io") {
+            if uri.contains("game-info") || uri.contains("lobby-ranked") {
+                if let Some(webview) = webview {
+                    unsafe {
+                        webview.PostWebMessageAsString(w!("game-updated")).ok();
                     }
+                }
+                return Ok(());
+            }
 
-                    request.SetUri(PCWSTR::null())?;
-                    Ok(())
-                })),
-                token,
-            )
-            .ok();
+            let filename: &str = uri
+                .split("krunker.io/")
+                .nth(1)
+                .and_then(|s| s.split('?').next())
+                .unwrap_or("");
+
+            if let Some(stream) = swaps.get(filename) {
+                let response = unsafe {
+                    env_clone.CreateWebResourceResponse(
+                        stream,
+                        200,
+                        w!("OK"),
+                        w!("Access-Control-Allow-Origin: *"),
+                    )?
+                };
+                unsafe { args.SetResponse(Some(&response))? };
+                return Ok(());
+            }
+        }
+
+        unsafe {
+            request.SetUri(PCWSTR::null())?;
+        }
+        Ok(())
+    }));
+
+    unsafe {
+        webview.add_WebResourceRequested(&handler, token).ok();
     }
 }
 
 fn set_new_window_requested_handler(webview: &ICoreWebView2, env: &ICoreWebView2Environment, token: &mut i64) {
-    // let the clone happens outside unsafe.
-    // lets just not have the clone happen inside unsafe xddd
     let env_clone = env.clone();
+    let handler = NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else {
+            return Ok(());
+        };
+        let features = unsafe { args.WindowFeatures()? };
+        let mut has_position: BOOL = false.into();
+        let _ = unsafe { features.HasPosition(&mut has_position) };
+        let mut has_size: BOOL = false.into();
+        let _ = unsafe { features.HasSize(&mut has_size) };
+        let mut window_state = None;
+        if has_position.as_bool() && has_size.as_bool() {
+            let mut left = 0;
+            let mut top = 0;
+            let mut width = 0;
+            let mut height = 0;
+            let _ = unsafe { features.Left(&mut left) };
+            let _ = unsafe { features.Top(&mut top) };
+            let _ = unsafe { features.Width(&mut width) };
+            let _ = unsafe { features.Height(&mut height) };
+            window_state = Some(WindowState {
+                fullscreen: false,
+                position: window::Position {
+                    left: left as i32,
+                    top: top as i32,
+                    right: left as i32 + width as i32,
+                    bottom: top as i32 + height as i32,
+                },
+            });
+        }
+
+        let deferral = unsafe { args.GetDeferral()? };
+        unsafe {
+            args.SetHandled(true).unwrap();
+        }
+        let (hwnd, window_state) = window::create_window("Custom", true, window_state);
+        let mut uri = PWSTR::null();
+        let _ = unsafe { args.Uri(&mut uri) };
+        let uri = take_pwstr(uri);
+        let args = utils::UnsafeSend::new(args);
+        let deferral = utils::UnsafeSend::new(deferral);
+        let env_for_creation = env_clone.clone();
+        let env_for_handler = utils::UnsafeSend::new(env_clone.clone());
+        window::create_core_webview2_controller_async(
+            hwnd,
+            env_for_creation,
+            window_state,
+            move |controller| {
+                let controller = controller.unwrap();
+                let webview = unsafe { controller.CoreWebView2().unwrap() };
+                if uri.contains("krunker.io/social.html")
+                    && config_bool("userscripts", false)
+                    && let Err(e) = userscripts::load(&webview, true)
+                {
+                    println!("can't load userscripts on social window {}", e);
+                }
+
+                unsafe {
+                    args.take().SetNewWindow(&webview).unwrap();
+                }
+                set_handlers(&webview, &env_for_handler);
+
+                unsafe {
+                    deferral.take().Complete().ok();
+                }
+            },
+        );
+
+        Ok(())
+    }));
+
     unsafe {
-        webview
-            .add_NewWindowRequested(
-                &NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
-                    let Some(args) = args else {
-                        return Ok(());
-                    };
-                    let features = args.WindowFeatures()?;
-                    let mut has_position: BOOL = false.into();
-                    let _ = features.HasPosition(&mut has_position);
-                    let mut has_size: BOOL = false.into();
-                    let _ = features.HasSize(&mut has_size);
-                    let mut window_state = None;
-                    if has_position.as_bool() && has_size.as_bool() {
-                        let mut left = 0;
-                        let mut top = 0;
-                        let mut width = 0;
-                        let mut height = 0;
-                        let _ = features.Left(&mut left);
-                        let _ = features.Top(&mut top);
-                        let _ = features.Width(&mut width);
-                        let _ = features.Height(&mut height);
-                        window_state = Some(WindowState {
-                            fullscreen: false,
-                            position: window::Position {
-                                left: left as i32,
-                                top: top as i32,
-                                right: left as i32 + width as i32,
-                                bottom: top as i32 + height as i32,
-                            },
-                        });
-                    }
-
-                    let deferral = args.GetDeferral()?;
-                    args.SetHandled(true).unwrap();
-                    let (hwnd, window_state) = window::create_window("Custom", true, window_state);
-                    let mut uri = PWSTR::null();
-                    let _ = args.Uri(&mut uri);
-                    let uri = take_pwstr(uri);
-                    let args = utils::UnsafeSend::new(args);
-                    let deferral = utils::UnsafeSend::new(deferral);
-                    let env_for_creation = env_clone.clone();
-                    let env_for_handler = utils::UnsafeSend::new(env_clone.clone());
-                    window::create_core_webview2_controller_async(
-                        hwnd,
-                        env_for_creation,
-                        window_state,
-                        move |controller| {
-                            let controller = controller.unwrap();
-                            let webview = controller.CoreWebView2().unwrap();
-                            if uri.contains("krunker.io/social.html")
-                                && config_bool("userscripts", false)
-                                && let Err(e) = userscripts::load(&webview, true)
-                            {
-                                println!("can't load userscripts on social window {}", e);
-                            }
-
-                            args.take().SetNewWindow(&webview).unwrap();
-                            set_handlers(&webview, &env_for_handler);
-
-                            deferral.take().Complete().ok();
-                        },
-                    );
-
-                    Ok(())
-                })),
-                token,
-            )
-            .ok();
+        webview.add_NewWindowRequested(&handler, token).ok();
     }
 }
 
@@ -417,7 +423,7 @@ pub fn create_main_window(env: Option<ICoreWebView2Environment>) -> window::Wind
         None
     };
 
-    let mut main_window = window::Window::new_core(&start_mode, args, env, state);
+    let main_window = window::Window::new_core(&start_mode, args, env, state);
     let discord_client = create_discord_client_if_enabled();
 
     modules::priority::set(config_string("webviewPriority", "Normal").as_str());
@@ -431,20 +437,23 @@ pub fn create_main_window(env: Option<ICoreWebView2Environment>) -> window::Wind
     let main_window_ = main_window.clone();
     let js_bundle = load_js_bundle();
 
+    let handler = AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(move |_, id| {
+        *SCRIPT_ID.lock().unwrap() = id;
+        Ok(())
+    }));
     unsafe {
         main_window
             .webview
             .AddScriptToExecuteOnDocumentCreated(
                 PCWSTR(utils::create_utf_string(js_bundle).as_ptr()),
-                &AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(move |_, id| {
-                    *SCRIPT_ID.lock().unwrap() = id;
-                    Ok(())
-                })),
+                &handler,
             )
             .ok();
+    }
 
-        set_handlers(&main_window.webview, &main_window.env);
+    set_handlers(&main_window.webview, &main_window.env);
 
+    unsafe {
         main_window
             .webview
             .AddWebResourceRequestedFilter(
@@ -452,63 +461,78 @@ pub fn create_main_window(env: Option<ICoreWebView2Environment>) -> window::Wind
                 COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
             )
             .ok();
+    }
 
-        if config_bool("realPing", false) {
-            modules::ping::load(&main_window.webview);
-        }
+    if config_bool("realPing", false) {
+        modules::ping::load(&main_window.webview);
+    }
 
-        let main_window_for_message = main_window.clone();
-        let discord_client_for_message = discord_client.clone();
-        let mut web_message_token = 0i64;
+    let main_window_for_message = main_window.clone();
+    let discord_client_for_message = discord_client.clone();
+    let mut web_message_token = 0i64;
+    let web_message_handler = WebMessageReceivedEventHandler::create(Box::new(
+        move |webview, args| {
+            let Some(webview) = webview else {
+                return Ok(());
+            };
+            let Some(args) = args else {
+                return Ok(());
+            };
+            let mut message = PWSTR::null();
+            unsafe {
+                args.TryGetWebMessageAsString(&mut message).ok();
+            }
+            let message_string = take_pwstr(message);
+            handle_web_message(
+                &webview,
+                &main_window_for_message,
+                &discord_client_for_message,
+                &message_string,
+            )
+        },
+    ));
+    unsafe {
         main_window
             .webview
             .add_WebMessageReceived(
-                &WebMessageReceivedEventHandler::create(Box::new(
-                    move |webview, args| {
-                        let Some(webview) = webview else {
-                            return Ok(());
-                        };
-                        let Some(args) = args else {
-                            return Ok(());
-                        };
-                        let mut message = PWSTR::null();
-                        args.TryGetWebMessageAsString(&mut message).ok();
-                        let message_string = take_pwstr(message);
-                        handle_web_message(
-                            &webview,
-                            &main_window_for_message,
-                            &discord_client_for_message,
-                            &message_string,
-                        )
-                    },
-                )),
+                &web_message_handler,
                 &mut web_message_token,
             )
             .ok();
+    }
 
+    unsafe {
         main_window.webview.Navigate(w!("https://krunker.io")).ok();
+    }
 
-        let mut accelerator_token = 0i64;
+    let mut accelerator_token = 0i64;
+    let mut main_window_for_accelerator = main_window.clone();
+    let accelerator_handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else {
+            return Ok(());
+        };
+
+        let mut key_event_kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
+        unsafe {
+            args.KeyEventKind(&mut key_event_kind)?;
+        }
+        if key_event_kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN {
+            return Ok(());
+        }
+        let mut pressed_key: u32 = 0;
+        unsafe {
+            args.VirtualKey(&mut pressed_key)?;
+        }
+
+        main_window_for_accelerator.handle_accelerator_key(pressed_key as u16);
+        Ok(())
+    }));
+    unsafe {
         main_window
             .controller
             .clone()
             .add_AcceleratorKeyPressed(
-                &AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
-                    let Some(args) = args else {
-                        return Ok(());
-                    };
-
-                    let mut key_event_kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
-                    args.KeyEventKind(&mut key_event_kind)?;
-                    if key_event_kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN {
-                        return Ok(());
-                    }
-                    let mut pressed_key: u32 = 0;
-                    args.VirtualKey(&mut pressed_key)?;
-
-                    main_window.handle_accelerator_key(pressed_key as u16);
-                    Ok(())
-                })),
+                &accelerator_handler,
                 &mut accelerator_token,
             )
             .ok();
@@ -548,13 +572,19 @@ fn main() {
         }
     }
     let mut msg: MSG = MSG::default();
-    unsafe {
-        while GetMessageW(&mut msg, None, 0, 0).into() {
+    loop {
+        let has_msg = unsafe { GetMessageW(&mut msg, None, 0, 0).as_bool() };
+        if !has_msg {
+            break;
+        }
+        unsafe {
             let _ = TranslateMessage(&msg);
-            if msg.message == constants::WM_MINOR_UPDATE_READY
-                && let Ok(js_content) = rx.try_recv()
-            {
-                println!("updating js, {}", &*SCRIPT_ID.lock().unwrap());
+        }
+        if msg.message == constants::WM_MINOR_UPDATE_READY
+            && let Ok(js_content) = rx.try_recv()
+        {
+            println!("updating js, {}", &*SCRIPT_ID.lock().unwrap());
+            unsafe {
                 window
                     .webview
                     .RemoveScriptToExecuteOnDocumentCreated(PCWSTR(
@@ -566,6 +596,8 @@ fn main() {
                     .AddScriptToExecuteOnDocumentCreated(PCWSTR(utils::create_utf_string(js_content).as_ptr()), None)
                     .ok();
             }
+        }
+        unsafe {
             DispatchMessageW(&msg);
         }
     }
