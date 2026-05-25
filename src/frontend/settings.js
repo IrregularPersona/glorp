@@ -41,24 +41,24 @@ window.glorp.settings.changeSetting = (id, value, slider) => {
 			if (value) {
 				import("./components/menuTimer.css").then((css) => {
 					const menuTimerCSS = document.createElement("style");
-					menuTimerCSS.id = "menuTimerCSS";
+					menuTimerCSS.id = "glorp_menuTimerCSS";
 					menuTimerCSS.innerHTML = css.default;
 					document.head.append(menuTimerCSS);
 				});
 			} else {
-				document.querySelector("#menuTimerCSS")?.remove();
+				document.querySelector("#glorp_menuTimerCSS")?.remove();
 			}
 			break;
 		case "cleanUI": {
 			if (value) {
 				import("./components/clean.css").then((css) => {
 					const cleanCSS = document.createElement("style");
-					cleanCSS.id = "cleanCSS";
+					cleanCSS.id = "glorp_cleanCSS";
 					cleanCSS.innerHTML = css.default;
 					document.head.append(cleanCSS);
 				});
 			} else {
-				document.querySelector("#cleanCSS")?.remove();
+				document.querySelector("#glorp_cleanCSS")?.remove();
 			}
 			break;
 		}

@@ -45,13 +45,11 @@ document.addEventListener(
 		if (window.glorp?.settings?.data?.cleanUI) {
 			import("./components/clean.css").then((css) => {
 				const cleanCSS = document.createElement("style");
-				cleanCSS.id = "cleanUICSS";
+				cleanCSS.id = "glorp_cleanCSS";
 				cleanCSS.innerHTML = css.default;
 				document.head.append(cleanCSS);
 			});
 		}
-
-		if (window.glorp?.settings?.data?.exitButton) document.querySelector("#clientExit").style.display = "flex";
 	},
 	{ once: true },
 );
@@ -89,6 +87,7 @@ Object.defineProperty(window, "gameLoaded", {
 		if (window.glorp?.settings.data?.accountManager) import("./modules/accountManager.js");
 		if (window.glorp?.settings.data?.showPing) import("./modules/showPing.js");
 		if (window.glorp?.settings.data?.realPing) import("./modules/realPing.js");
+		if (window.glorp?.settings?.data?.exitButton) document.querySelector("#clientExit").style.display = "flex";
 
 		if (window.glorp?.settings.data?.rampBoost && !window.checkCompMode()) {
 			window.chrome.webview.postMessage("toggle-rboost, true");
@@ -156,7 +155,7 @@ Object.defineProperty(window, "gameLoaded", {
 		if (window.glorp?.settings.data?.menuTimer) {
 			import("./components/menuTimer.css").then((module) => {
 				const menuTimerCSS = document.createElement("style");
-				menuTimerCSS.id = "menuTimerCSS";
+				menuTimerCSS.id = "glorp_menuTimerCSS";
 				menuTimerCSS.innerHTML = module.default;
 				document.head.append(menuTimerCSS);
 			});
