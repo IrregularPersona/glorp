@@ -1,8 +1,6 @@
 #![cfg_attr(feature = "packaged", windows_subsystem = "windows")]
 use crate::{modules::userscripts, window::WindowState};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
-#[cfg(debug_assertions)]
-use std::sync::Arc;
 use std::{
     collections::HashMap,
     env, fs, io, path, process, result, sync,
@@ -27,7 +25,6 @@ mod modules {
     pub mod priority;
     pub mod swapper;
     pub mod userscripts;
-    pub mod fps_stats;
 }
 
 static LAUNCH_ARGS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(env::args().skip(1).collect()));
@@ -205,7 +202,7 @@ fn set_handlers<T: utils::EnvironmentRef>(webview: &ICoreWebView2, env_wrapper: 
 }
 
 pub fn create_main_window(
-    env: Option<ICoreWebView2Environment>, fps_stats: Option<Arc<Mutex<modules::fps_stats::FpsStats>>>,
+    env: Option<ICoreWebView2Environment>,
 ) -> window::Window {
     let mut webview2_folder: path::PathBuf = env::current_exe().unwrap();
     webview2_folder.pop();
@@ -318,21 +315,9 @@ pub fn create_main_window(
                     let message_string = take_pwstr(message);
 
                     if message_string.trim_start().starts_with('{') {
-                        if let Some(fps_stats_arc) = fps_stats.as_ref() {
-                            if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&message_string) {
-                                if json_value.get("command").and_then(|c| c.as_str()) == Some("fps-stats") {
-                                    if let Some(data) = json_value.get("data") {
-                                        if let Ok(mut parsed) = serde_json::from_value::<modules::fps_stats::FpsStats>(data.clone()) {
-                                            let mut stats = fps_stats_arc.lock().expect("FPS stats mutex poisoned");
-                                            parsed.history = stats.history.clone();
-                                            parsed.history.push_back(parsed.current);
-                                            if parsed.history.len() > 100 {
-                                                parsed.history.pop_front();
-                                            }
-                                            *stats = parsed;
-                                        }
-                                    }
-                                }
+                        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&message_string) {
+                            if json_value.get("command").and_then(|c| c.as_str()) == Some("fps-stats") {
+                                // FPS stats are now handled internally by the ImGui window via shared memory
                             }
                         }
                         return Ok(());
@@ -425,21 +410,7 @@ pub fn create_main_window(
                         }
                         #[cfg(debug_assertions)]
                         Some(&"fps-stats") => {
-                            if let Some(fps_stats_arc) = fps_stats.as_ref() {
-                                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&message_string) {
-                                    if let Some(data) = json_value.get("data") {
-                                        if let Ok(mut parsed) = serde_json::from_value::<modules::fps_stats::FpsStats>(data.clone()) {
-                                            let mut stats = fps_stats_arc.lock().expect("FPS stats mutex poisoned");
-                                            parsed.history = stats.history.clone();
-                                            parsed.history.push_back(parsed.current);
-                                            if parsed.history.len() > 100 {
-                                                parsed.history.pop_front();
-                                            }
-                                            *stats = parsed;
-                                        }
-                                    }
-                                }
-                            }
+                            // FPS stats are now handled internally by the ImGui window via shared memory
                         }
                         Some(&"toggle-rboost") => {
                             let value = parts[1].parse::<bool>().unwrap_or(false);
@@ -511,17 +482,11 @@ fn main() {
         eprintln!("failed to set all the files in place {}", e);
     }
 
-    #[cfg(debug_assertions)]
-    let fps_stats = {
-        use modules::fps_stats::FpsStats;
-        use std::sync::{Arc, Mutex};
-        Arc::new(Mutex::new(FpsStats::default()))
-    };
 
+    let window = create_main_window(None);
     #[cfg(debug_assertions)]
-    modules::imgui_window::spawn_imgui_window(fps_stats.clone());
+    modules::imgui_window::spawn_imgui_window(window.hwnd);
 
-    let window = create_main_window(None, Some(fps_stats.clone()));
     let (_tx, rx) = sync::mpsc::channel::<String>();
     #[cfg(feature = "packaged")]
     {

@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     ffi::c_void,
     mem,
-    sync::{LazyLock, RwLock},
+    sync::{self, LazyLock, RwLock, atomic::AtomicU64},
     thread,
 };
 use windows::Win32::{
@@ -14,7 +14,7 @@ use windows::Win32::{
         Direct3D11::*,
         Dxgi::{Common::*, *},
     },
-    System::{Diagnostics::Debug::*, SystemServices::DLL_PROCESS_ATTACH, Threading::*},
+    System::{Diagnostics::Debug::*, SystemServices::DLL_PROCESS_ATTACH, Threading::*, Memory::*},
 };
 use windows::core::*;
 
@@ -82,8 +82,28 @@ static mut ORIGINAL_PRESENT: Option<
 > = None;
 
 static WAIT_HANDLE: LazyLock<RwLock<HashMap<usize, usize>>> = LazyLock::new(|| RwLock::new(HashMap::new()));
+static SHARED_MEM_PTR: AtomicU64 = AtomicU64::new(0);
+
+fn init_shared_mem() 
+{
+    // inherently unsafe 
+    unsafe {
+        let mapping = CreateFileMappingA(
+            INVALID_HANDLE_VALUE,
+            None, 
+            PAGE_READWRITE,
+            0,
+            64,
+            s!("GlorpFrameTiming"),
+        ).unwrap();
+
+        let ptr = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 64);
+        SHARED_MEM_PTR.store(ptr.Value as u64, sync::atomic::Ordering::SeqCst);
+    }
+}
 
 fn attach() {
+    init_shared_mem();
     unsafe {
         let (factory, swap_chain) = get_idxgi().unwrap_or_else(|e| {
             debug_print(format!("Failed to get factory and swap chain: {:?}", e));
@@ -173,12 +193,28 @@ unsafe extern "system" fn present_hk(
 ) -> HRESULT {
     thread_local! {
         static INITIALIZED: cell::Cell<bool> = const { cell::Cell::new(false) } ;
+        static LAST_PRESENT: cell::Cell<Option<std::time::Instant>> = const { cell::Cell::new(None) };
     }
     if !INITIALIZED.get() {
         let mut task_index = 0u32;
         unsafe { AvSetMmThreadCharacteristicsW(w!("Games"), &mut task_index) };
         INITIALIZED.set(true);
     }
+
+    LAST_PRESENT.with(|last| {
+        let now = std::time::Instant::now();
+        if let Some(prev) = last.get() {
+            let frame_ns = now.duration_since(prev).as_nanos() as u64;
+            let ptr = SHARED_MEM_PTR.load(sync::atomic::Ordering::SeqCst);
+            if ptr != 0 {
+                unsafe {
+                    *(ptr as *mut u64) = frame_ns;
+                }
+            }
+        }
+
+        last.set(Some(now));
+    });
 
     unsafe {
         let handle_opt = WAIT_HANDLE.read().unwrap().get(&(p_this as usize)).copied();
