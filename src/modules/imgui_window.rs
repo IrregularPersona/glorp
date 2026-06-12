@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{COLORREF, HWND};
 
 struct SendHwnd(HWND);
 unsafe impl Send for SendHwnd {}
@@ -31,8 +31,6 @@ pub fn spawn_imgui_window(parent_hwnd: HWND) {
         let cb = glium::glutin::ContextBuilder::new();
         let display = Display::new(window, cb, &event_loop).unwrap();
 
-        
-        // get overlay HWND and make it layered + click-through
         let overlay_hwnd = unsafe {
             let title: Vec<u16> = "glorp | overlay\0".encode_utf16().collect();
             FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())).unwrap()
@@ -40,7 +38,16 @@ pub fn spawn_imgui_window(parent_hwnd: HWND) {
 
         unsafe {
             let style = GetWindowLongPtrW(overlay_hwnd, GWL_EXSTYLE);
-            SetWindowLongPtrW(overlay_hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT.0 as isize | WS_EX_LAYERED.0 as isize);
+            SetWindowLongPtrW(
+                overlay_hwnd, 
+                GWL_EXSTYLE,
+                style 
+                    | WS_EX_TRANSPARENT.0 as isize 
+                    | WS_EX_LAYERED.0 as isize
+                    | WS_EX_TOPMOST.0 as isize
+                    | WS_EX_TOOLWINDOW.0 as isize, // hide from alt-tab
+                );
+            SetLayeredWindowAttributes(overlay_hwnd, COLORREF(0), 255, LWA_ALPHA).ok();
         }
 
         let overlay = UnsafeSend::new(overlay_hwnd);
