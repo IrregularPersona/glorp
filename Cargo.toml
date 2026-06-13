@@ -17,10 +17,19 @@ incremental = true
 
 [profile.release]
 codegen-units = 1
-lto = true
+lto = "thin"
 opt-level = 3
 debug-assertions = true
 strip = "symbols"
+
+[profile.release.package.imgui-glium-renderer]
+opt-level = 0
+
+[profile.release.package.glium]
+opt-level = 0
+
+[profile.release.package.imgui]
+opt-level = 0
 
 [features]
 packaged = []

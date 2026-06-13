@@ -1,16 +1,42 @@
 use std::collections::VecDeque;
+use glium::glutin::platform::windows::WindowExtWindows;
 use windows::Win32::Foundation::{COLORREF, HWND};
+use crate::utils::debug_print;
 
-struct SendHwnd(HWND);
-unsafe impl Send for SendHwnd {}
+struct OverlaySettings {
+    show_fps:       bool,
+    show_frametime: bool,
+    show_avg:       bool,
+    show_low1:      bool,
+    show_low01:     bool,
+    show_graph:     bool,
+}
+
+impl Default for OverlaySettings {
+    fn default() -> Self {
+        Self {
+            show_fps:       true,
+            show_frametime: true,
+            show_avg:       true,
+            show_low1:      true,
+            show_low01:     true,
+            show_graph:     true,
+        }
+    }
+}
 
 pub fn spawn_imgui_window(parent_hwnd: HWND) {
+
+    std::panic::set_hook(Box::new(|info| {
+        debug_print(format!("[glorp] PANIC: {}", info));
+    }));
+
 
     // it deadass has to be here cuz u cant move c_void pointers between threads safely LMFAO
     let parent = UnsafeSend::new(parent_hwnd);
 
     std::thread::spawn(move || {
-        use glium::glutin::event::{Event, WindowEvent};
+        use glium::glutin::event::{Event, VirtualKeyCode, WindowEvent};
         use glium::glutin::event_loop::EventLoop;
         use glium::glutin::platform::windows::EventLoopExtWindows;
         use glium::glutin::window::WindowBuilder;
@@ -30,23 +56,24 @@ pub fn spawn_imgui_window(parent_hwnd: HWND) {
 
         let cb = glium::glutin::ContextBuilder::new();
         let display = Display::new(window, cb, &event_loop).unwrap();
+        
+        debug_print(format!("[glorp] gl vendor: {:?}", display.get_opengl_vendor_string()));
+        debug_print(format!("[glorp] gl renderer: {:?}", display.get_opengl_renderer_string()));
 
-        let overlay_hwnd = unsafe {
-            let title: Vec<u16> = "glorp | overlay\0".encode_utf16().collect();
-            FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())).unwrap()
-        };
+        let overlay_hwnd = HWND(display.gl_window().window().hwnd() as *mut _);
 
         unsafe {
             let style = GetWindowLongPtrW(overlay_hwnd, GWL_EXSTYLE);
             SetWindowLongPtrW(
-                overlay_hwnd, 
+                overlay_hwnd,
                 GWL_EXSTYLE,
-                style 
-                    | WS_EX_TRANSPARENT.0 as isize 
+                (style
+                    | WS_EX_TRANSPARENT.0 as isize
                     | WS_EX_LAYERED.0 as isize
                     | WS_EX_TOPMOST.0 as isize
-                    | WS_EX_TOOLWINDOW.0 as isize, // hide from alt-tab
-                );
+                    | WS_EX_TOOLWINDOW.0 as isize)
+                    & !(WS_EX_APPWINDOW.0 as isize),
+            );
             SetLayeredWindowAttributes(overlay_hwnd, COLORREF(0), 255, LWA_ALPHA).ok();
         }
 
@@ -72,8 +99,42 @@ pub fn spawn_imgui_window(parent_hwnd: HWND) {
             }
         });
 
+        // let font_data = std::fs::read("C:\\Windows\\Fonts\\segoeui.ttf")
+        //     .expect("Failed to load system font");
+        debug_print("[glorp] font file read ok");
+
         let mut imgui = imgui::Context::create();
+        debug_print("[glorp] imgui context created");
         imgui.set_ini_filename(None);
+        imgui::Style::use_light_colors(imgui.style_mut()); 
+        // imgui.style_mut().colors[imgui::StyleColor::Text as usize] =
+        //     [1.0, 1.0, 1.0, 1.0];
+
+
+        // let _font_data_guard = &font_data;
+
+        // imgui.fonts().add_font(&[
+        //     imgui::FontSource::TtfData {
+        //         data: &font_data,
+        //         size_pixels: 20.0,
+        //         config: None,
+        //     }
+        // ]);
+
+        imgui.fonts().add_font(&[imgui::FontSource::DefaultFontData {
+            config: Some(imgui::FontConfig {
+                size_pixels: 24.0,
+                ..Default::default()
+            }),
+        }]);
+
+        {
+            let mut fonts = imgui.fonts();
+            let tex = fonts.build_rgba32_texture();
+            debug_print(format!("[glorp] atlas: {}x{} len={}", tex.width, tex.height, tex.data.len()));
+        }
+
+
 
         let mut platform = WinitPlatform::init(&mut imgui);
         platform.attach_window(
@@ -82,22 +143,33 @@ pub fn spawn_imgui_window(parent_hwnd: HWND) {
             imgui_winit_support::HiDpiMode::Default,
         );
 
-        imgui.fonts().add_font(&[imgui::FontSource::DefaultFontData {
-            config: Some(imgui::FontConfig {
-                size_pixels:32.0,
-                ..Default::default()
-            }),
-        }]);
-
         let mut renderer = imgui_glium_renderer::Renderer::init(&mut imgui, &display).unwrap();
+        debug_print("[glorp] renderer init ok");
         let mut last_frame = std::time::Instant::now();
-        let mut fps_history: VecDeque<f32> = VecDeque::with_capacity(100);
+        let mut last_read = std::time::Instant::now();
+        let mut ft_history: VecDeque<f32> = VecDeque::with_capacity(100);
         let mut current_fps = 0.0f32;
+        let mut current_ft = 0.0f32;
+
+        let mut settings = OverlaySettings::default();
+        let mut show_settings = false;
 
         event_loop.run(move |event, _, control_flow| {
             let now = std::time::Instant::now();
             let _delta = now - last_frame;
             last_frame = now;
+
+            match &event {
+                Event::WindowEvent { event: WindowEvent::KeyboardInput { input, .. }, .. } => {
+                    // toggle settings window on Page Up key idk
+                    if input.state == glium::glutin::event::ElementState::Pressed {
+                        if let Some(VirtualKeyCode::PageUp) = input.virtual_keycode {
+                            show_settings = !show_settings;
+                        }
+                    }
+                }
+                _ => {}
+            }
 
             match event {
                 Event::WindowEvent {
@@ -108,29 +180,48 @@ pub fn spawn_imgui_window(parent_hwnd: HWND) {
                 }
 
                 Event::MainEventsCleared => {
+                    thread_local! {
+                        static FRAME_COUNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+                    }
+                    FRAME_COUNT.with(|c| {
+                        let n = c.get();
+                        if n < 5 {
+                            debug_print(format!("[glorp] frame {n}"));
+                        }
+                        c.set(n + 1);
+                    });
+
+                    // debug_print(format!("[glorp] render ok frame {}", FRAME_COUNT.with(|c| c.get())));
+
+
+                    if last_read.elapsed() >= std::time::Duration::from_millis(250) {
+                        if let Some((fps, ft)) = read_frame_data() {
+                            current_fps = fps;
+                            current_ft = ft;
+                            ft_history.push_back(ft);
+                            if ft_history.len() > 100 {
+                                ft_history.pop_front();
+                            }
+                        }
+                        last_read = std::time::Instant::now();
+                    }
+
                     platform
                         .prepare_frame(imgui.io_mut(), display.gl_window().window())
                         .expect("Failed to prepare frame");
 
                     let ui = imgui.frame();
 
-                    if let Some(fps) = read_gpu_frame_time() {
-                        current_fps = fps;
-                        fps_history.push_back(fps);
-                        if fps_history.len() > 100 {
-                            fps_history.pop_front();
-                        }
-                    }
+                    let (average, low1, low01) = calculate_stats(&ft_history);
 
-                    let (average, low1, low01) = calculate_stats(&fps_history);
-
-                    // no background, no border, no titlebar
-                    let _no_bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.0, 0.0, 0.0, 0.0]);
-                    let _no_border = ui.push_style_color(imgui::StyleColor::Border, [0.0, 0.0, 0.0, 0.0]);
+                    // --- overlay ---
+                    let _no_bg     = ui.push_style_color(imgui::StyleColor::WindowBg, [30.0, 0.0, 0.0, 0.0]);
+                    let _no_border = ui.push_style_color(imgui::StyleColor::Border,   [0.0, 0.0, 0.0, 0.0]);
+                    let _text      = ui.push_style_color(imgui::StyleColor::Text,      [1.0, 1.0, 1.0, 1.0]);
 
                     imgui::Window::new("##overlay")
-                        .size([300.0, 200.0], imgui::Condition::Always)
-                        .position([10.0, 150.0], imgui::Condition::Always)
+                        .size([300.0, 300.0], imgui::Condition::Always)
+                        .position([20.0, 20.0], imgui::Condition::Always)
                         .flags(
                             imgui::WindowFlags::NO_TITLE_BAR
                             | imgui::WindowFlags::NO_RESIZE
@@ -140,40 +231,63 @@ pub fn spawn_imgui_window(parent_hwnd: HWND) {
                             | imgui::WindowFlags::NO_SAVED_SETTINGS,
                         )
                         .build(&ui, || {
-                            let color = if current_fps >= 60.0 {
-                                [0.0, 1.0, 0.3, 1.0]
-                            } else if current_fps >= 30.0 {
-                                [1.0, 0.8, 0.0, 1.0]
-                            } else {
-                                [1.0, 0.2, 0.2, 1.0]
-                            };
+                            if settings.show_fps {
+                                let color = if current_fps >= 60.0 {
+                                    [0.0, 1.0, 0.3, 1.0]
+                                } else if current_fps >= 30.0 {
+                                    [1.0, 0.8, 0.0, 1.0]
+                                } else {
+                                    [1.0, 0.2, 0.2, 1.0]
+                                };
+                                let _c = ui.push_style_color(imgui::StyleColor::Text, color);
+                                ui.text(format!("FPS:      {:>6.1}", current_fps));
+                            }
 
-                            let _c = ui.push_style_color(imgui::StyleColor::Text, color);
-                            ui.text(format!("FPS:     {:>5.1}", current_fps));
-                            drop(_c);
+                            if settings.show_frametime {
+                                ui.text(format!("FT:       {:>5.2} ms", current_ft));
+                            }
 
-                            ui.text(format!("Avg:     {:>5.1}", average));
-                            ui.text(format!("1% Low:  {:>5.1}", low1));
-                            ui.text(format!("0.1% Low:{:>5.1}", low01));
+                            if settings.show_avg {
+                                ui.text(format!("Avg FT:   {:>5.2} ms", average));
+                            }
 
-                            if !fps_history.is_empty() {
-                                let overlay = format!("{:.1} fps", current_fps);
-                                let (front_slice, _) = fps_history.as_slices();
-                                ui.plot_lines("##fps_plot", front_slice)
-                                    .overlay_text(&overlay)
-                                    .scale_min(0.0)
-                                    .scale_max(2000.0)
-                                    .graph_size([240.0, 80.0])
-                                    .build();
+                            if settings.show_low1 {
+                                ui.text(format!("99th%%:   {:>5.2} ms", low1));
+                            }
+
+                            if settings.show_low01 {
+                                ui.text(format!("99.9th%%: {:>5.2} ms", low01));
                             }
                         });
 
                     drop(_no_bg);
                     drop(_no_border);
+                    drop(_text);
+
+                    // --- settings window ---
+                    if show_settings {
+                        imgui::Window::new("glorp | settings")
+                            .size([280.0, 240.0], imgui::Condition::Always)
+                            .position([320.0, 150.0], imgui::Condition::FirstUseEver)
+                            .flags(
+                                imgui::WindowFlags::NO_RESIZE
+                                | imgui::WindowFlags::NO_SAVED_SETTINGS,
+                            )
+                            .opened(&mut show_settings)
+                            .build(&ui, || {
+                                ui.text("Overlay metrics");
+                                ui.separator();
+                                ui.checkbox("FPS",               &mut settings.show_fps);
+                                ui.checkbox("Frame time (ms)",   &mut settings.show_frametime);
+                                ui.checkbox("Avg frame time",    &mut settings.show_avg);
+                                ui.checkbox("99th percentile",   &mut settings.show_low1);
+                                ui.checkbox("99.9th percentile", &mut settings.show_low01);
+                                ui.checkbox("Graph",             &mut settings.show_graph);
+                            });
+                    }
 
                     platform.prepare_render(&ui, display.gl_window().window());
                     let mut target = display.draw();
-                    // fully transparent clear
                     target.clear_color_srgb(0.0, 0.0, 0.0, 0.0);
                     let draw_data = ui.render();
                     renderer.render(&mut target, draw_data).expect("Render failed");
@@ -202,41 +316,24 @@ fn calculate_stats(history: &VecDeque<f32>) -> (f32, f32, f32) {
 
     let average = sorted.iter().sum::<f32>() / sorted.len() as f32;
 
-    // Calculate 1st and 0.1st percentiles (low fps)
-    let low1 = if sorted.len() > 1 {
-        let idx = ((sorted.len() as f32 * 0.01).ceil() as usize).saturating_sub(1);
-        sorted[idx]
-    } else {
-        sorted[0]
-    };
+    // 99th and 99.9th percentile frametimes — higher = worse
+    let p99 = sorted[((sorted.len() as f32 * 0.99) as usize).min(sorted.len() - 1)];
+    let p999 = sorted[((sorted.len() as f32 * 0.999) as usize).min(sorted.len() - 1)];
 
-    let low01 = if sorted.len() > 1 {
-        let idx = ((sorted.len() as f32 * 0.001).ceil() as usize).saturating_sub(1);
-        sorted[idx]
-    } else {
-        sorted[0]
-    };
-
-    (average, low1, low01)
+    (average, p99, p999)
 }
 
-use windows::core::PCWSTR;
 use windows::{Win32::System::Memory::*, core::s};
-
 use crate::utils::UnsafeSend;
 
-pub fn read_gpu_frame_time() -> Option<f32> {
+pub fn read_frame_data() -> Option<(f32, f32)> {
     unsafe {
-        let mapping = OpenFileMappingA(
-            FILE_MAP_READ.0,
-            false,
-            s!("GlorpFrameTiming"),
-        ).ok()?;
+        let mapping = OpenFileMappingA(FILE_MAP_READ.0, false, s!("GlorpFrameTiming")).ok()?;
         let ptr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 64);
         if ptr.Value.is_null() { return None; }
         let frame_ns = *(ptr.Value as *const u64);
         let frame_ms = frame_ns as f32 / 1_000_000.0;
         let fps = 1000.0 / frame_ms.max(0.001);
-        Some(fps)
+        Some((fps, frame_ms))
     }
 }

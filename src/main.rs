@@ -484,7 +484,7 @@ fn main() {
 
 
     let window = create_main_window(None);
-    #[cfg(debug_assertions)]
+    // #[cfg(debug_assertions)]
     modules::imgui_window::spawn_imgui_window(window.hwnd);
 
     let (_tx, rx) = sync::mpsc::channel::<String>();
