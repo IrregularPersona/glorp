@@ -160,6 +160,9 @@ impl Window {
             VK_F12 => unsafe {
                 self.webview.OpenDevToolsWindow().ok();
             },
+            VK_PRIOR => {
+                crate::modules::imgui_window::toggle_settings();
+            }
             _ => {}
         }
     }

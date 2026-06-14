@@ -1,7 +1,31 @@
 use std::collections::VecDeque;
-use glium::glutin::platform::windows::WindowExtWindows;
-use windows::Win32::Foundation::{COLORREF, HWND};
-use crate::utils::debug_print;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
+use windows::{
+    Win32::{
+        Foundation::*,
+        Graphics::{
+            Direct2D::{Common::*, *},
+            DirectWrite::*,
+            Dxgi::Common::*,
+            Gdi::*,
+        },
+        System::Memory::*,
+        UI::WindowsAndMessaging::*,
+    },
+    core::*,
+};
+use crate::utils::{debug_print, UnsafeSend};
+
+pub static SHOW_SETTINGS: AtomicBool = AtomicBool::new(false);
+
+static OVERLAY_SETTINGS: LazyLock<Mutex<OverlaySettings>> =
+    LazyLock::new(|| Mutex::new(OverlaySettings::default()));
+
+pub fn toggle_settings() {
+    let current = SHOW_SETTINGS.load(Ordering::SeqCst);
+    SHOW_SETTINGS.store(!current, Ordering::SeqCst);
+}
 
 struct OverlaySettings {
     show_fps:       bool,
@@ -9,7 +33,6 @@ struct OverlaySettings {
     show_avg:       bool,
     show_low1:      bool,
     show_low01:     bool,
-    show_graph:     bool,
 }
 
 impl Default for OverlaySettings {
@@ -20,76 +43,277 @@ impl Default for OverlaySettings {
             show_avg:       true,
             show_low1:      true,
             show_low01:     true,
-            show_graph:     true,
         }
     }
 }
 
-pub fn spawn_imgui_window(parent_hwnd: HWND) {
+fn calculate_stats(history: &VecDeque<f32>) -> (f32, f32, f32) {
+    if history.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    let mut sorted = history.iter().copied().collect::<Vec<_>>();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let average = sorted.iter().sum::<f32>() / sorted.len() as f32;
+    let p99  = sorted[((sorted.len() as f32 * 0.99)  as usize).min(sorted.len() - 1)];
+    let p999 = sorted[((sorted.len() as f32 * 0.999) as usize).min(sorted.len() - 1)];
+    (average, p99, p999)
+}
 
+pub fn read_frame_data() -> Option<(f32, f32)> {
+    unsafe {
+        use windows::core::s;
+        let mapping = OpenFileMappingA(FILE_MAP_READ.0, false, s!("GlorpFrameTiming")).ok()?;
+        let ptr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 64);
+        if ptr.Value.is_null() { return None; }
+        let frame_ns = *(ptr.Value as *const u64);
+        let frame_ms = frame_ns as f32 / 1_000_000.0;
+        let fps = 1000.0 / frame_ms.max(0.001);
+        Some((fps, frame_ms))
+    }
+}
+
+struct OverlayRenderer {
+    hwnd:        HWND,
+    d2d_factory: ID2D1Factory,
+    dw_factory:  IDWriteFactory,
+    rt:          ID2D1DCRenderTarget,
+    fmt_large:   IDWriteTextFormat,
+    fmt_small:   IDWriteTextFormat,
+    brush_white: ID2D1SolidColorBrush,
+    brush_green: ID2D1SolidColorBrush,
+    brush_yellow:ID2D1SolidColorBrush,
+    brush_red:   ID2D1SolidColorBrush,
+}
+
+impl OverlayRenderer {
+    unsafe fn new(hwnd: HWND) -> Result<Self> {
+        let d2d_factory: ID2D1Factory = D2D1CreateFactory(
+            D2D1_FACTORY_TYPE_SINGLE_THREADED,
+            None,
+        )?;
+
+        let dw_factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+
+        let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
+            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            usage: D2D1_RENDER_TARGET_USAGE_NONE,
+            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+        };
+
+        let rt: ID2D1DCRenderTarget = d2d_factory.CreateDCRenderTarget(&rt_props)?;
+
+        let fmt_large = dw_factory.CreateTextFormat(
+            w!("Segoe UI"),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            18.0,
+            w!("en-us"),
+        )?;
+
+        let fmt_small = dw_factory.CreateTextFormat(
+            w!("Segoe UI"),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            16.0,
+            w!("en-us"),
+        )?;
+
+        let brush_white  = rt.CreateSolidColorBrush(&D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }, None)?;
+        let brush_green  = rt.CreateSolidColorBrush(&D2D1_COLOR_F { r: 0.0, g: 1.0, b: 0.3, a: 1.0 }, None)?;
+        let brush_yellow = rt.CreateSolidColorBrush(&D2D1_COLOR_F { r: 1.0, g: 0.8, b: 0.0, a: 1.0 }, None)?;
+        let brush_red    = rt.CreateSolidColorBrush(&D2D1_COLOR_F { r: 1.0, g: 0.2, b: 0.2, a: 1.0 }, None)?;
+
+        Ok(Self {
+            hwnd,
+            d2d_factory,
+            dw_factory,
+            rt,
+            fmt_large,
+            fmt_small,
+            brush_white,
+            brush_green,
+            brush_yellow,
+            brush_red,
+        })
+    }
+
+    unsafe fn render(
+        &self,
+        fps: f32,
+        ft: f32,
+        avg: f32,
+        p99: f32,
+        p999: f32,
+        settings: &OverlaySettings,
+    ) -> Result<()> {
+        let mut rect = RECT::default();
+        GetWindowRect(self.hwnd, &mut rect)?;
+        let w = rect.right - rect.left;
+        let h = rect.bottom - rect.top;
+
+        // create a DIB section to paint on
+        let hdc_screen = GetDC(None);
+        let hdc_mem = CreateCompatibleDC(hdc_screen);
+
+        let mut bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize:        std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth:       w,
+                biHeight:      -h, // top-down
+                biPlanes:      1,
+                biBitCount:    32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let hbm = CreateDIBSection(hdc_mem, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)?;
+        let old = SelectObject(hdc_mem, hbm);
+
+        // bind DC render target to our hdc
+        let bind_rect = RECT { left: 0, top: 0, right: w, bottom: h };
+        self.rt.BindDC(hdc_mem, &bind_rect)?;
+
+        self.rt.BeginDraw();
+        self.rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
+
+        let mut y = 10.0f32;
+        let x = 10.0f32;
+        let line_h = 22.0f32;
+
+        if settings.show_fps {
+            let fps_brush = if fps >= 60.0 { &self.brush_green }
+                else if fps >= 30.0 { &self.brush_yellow }
+                else { &self.brush_red };
+            let text = format!("FPS:      {:>6.1}", fps);
+            self.draw_text(&text, x, y, fps_brush)?;
+            y += line_h;
+        }
+        if settings.show_frametime {
+            let text = format!("FT:       {:>5.2} ms", ft);
+            self.draw_text(&text, x, y, &self.brush_white)?;
+            y += line_h;
+        }
+        if settings.show_avg {
+            let text = format!("Avg FT:   {:>5.2} ms", avg);
+            self.draw_text(&text, x, y, &self.brush_white)?;
+            y += line_h;
+        }
+        if settings.show_low1 {
+            let text = format!("99th%%:   {:>5.2} ms", p99);
+            self.draw_text(&text, x, y, &self.brush_white)?;
+            y += line_h;
+        }
+        if settings.show_low01 {
+            let text = format!("99.9th%%: {:>5.2} ms", p999);
+            self.draw_text(&text, x, y, &self.brush_white)?;
+        }
+
+        self.rt.EndDraw(None, None)?;
+
+        // alpha-blend onto screen via UpdateLayeredWindow
+        let pt_dst = POINT { x: rect.left, y: rect.top };
+        let sz = SIZE { cx: w, cy: h };
+        let pt_src = POINT { x: 0, y: 0 };
+        let blend = BLENDFUNCTION {
+            BlendOp:             AC_SRC_OVER as u8,
+            BlendFlags:          0,
+            SourceConstantAlpha: 255,
+            AlphaFormat:         AC_SRC_ALPHA as u8,
+        };
+        UpdateLayeredWindow(
+            self.hwnd,
+            hdc_screen,
+            Some(&pt_dst),
+            Some(&sz),
+            hdc_mem,
+            Some(&pt_src),
+            COLORREF(0),
+            Some(&blend),
+            ULW_ALPHA,
+        )?;
+
+        SelectObject(hdc_mem, old);
+        DeleteObject(hbm);
+        DeleteDC(hdc_mem);
+        ReleaseDC(None, hdc_screen);
+
+        Ok(())
+    }
+
+    unsafe fn draw_text(&self, text: &str, x: f32, y: f32, brush: &ID2D1SolidColorBrush) -> Result<()> {
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let layout_rect = D2D_RECT_F {
+            left:   x,
+            top:    y,
+            right:  x + 300.0,
+            bottom: y + 30.0,
+        };
+        self.rt.DrawText(
+            &wide,
+            &self.fmt_small,
+            &layout_rect,
+            brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
+        Ok(())
+    }
+}
+
+pub fn spawn_imgui_window(parent_hwnd: HWND) {
     std::panic::set_hook(Box::new(|info| {
         debug_print(format!("[glorp] PANIC: {}", info));
     }));
 
-
-    // it deadass has to be here cuz u cant move c_void pointers between threads safely LMFAO
     let parent = UnsafeSend::new(parent_hwnd);
 
-    std::thread::spawn(move || {
-        use glium::glutin::event::{Event, VirtualKeyCode, WindowEvent};
-        use glium::glutin::event_loop::EventLoop;
-        use glium::glutin::platform::windows::EventLoopExtWindows;
-        use glium::glutin::window::WindowBuilder;
-        use glium::{Display, Surface};
-        use imgui_winit_support::WinitPlatform;
-        use windows::Win32::UI::WindowsAndMessaging::*;
-        use windows::Win32::Foundation::RECT;
+    std::thread::spawn(move || unsafe {
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
-        let event_loop: EventLoop<()> = EventLoop::new_any_thread();
+        let hinstance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
 
-        let window = WindowBuilder::new()
-            .with_title("glorp | overlay")
-            .with_decorations(false)
-            .with_transparent(true)
-            .with_always_on_top(true)
-            .with_inner_size(glium::glutin::dpi::LogicalSize::new(1.0, 1.0));
+        let class_name = w!("glorp_overlay");
+        let wc = WNDCLASSW {
+            lpfnWndProc:   Some(overlay_wnd_proc),
+            hInstance:     hinstance,
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        RegisterClassW(&wc);
 
-        let cb = glium::glutin::ContextBuilder::new();
-        let display = Display::new(window, cb, &event_loop).unwrap();
-        
-        debug_print(format!("[glorp] gl vendor: {:?}", display.get_opengl_vendor_string()));
-        debug_print(format!("[glorp] gl renderer: {:?}", display.get_opengl_renderer_string()));
+        let hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            class_name,
+            w!("glorp overlay"),
+            WS_POPUP | WS_VISIBLE,
+            0, 0, 1, 1,
+            None, None, Some(hinstance), None,
+        ).unwrap();
 
-        let overlay_hwnd = HWND(display.gl_window().window().hwnd() as *mut _);
-
-        unsafe {
-            let style = GetWindowLongPtrW(overlay_hwnd, GWL_EXSTYLE);
-            SetWindowLongPtrW(
-                overlay_hwnd,
-                GWL_EXSTYLE,
-                (style
-                    | WS_EX_TRANSPARENT.0 as isize
-                    | WS_EX_LAYERED.0 as isize
-                    | WS_EX_TOPMOST.0 as isize
-                    | WS_EX_TOOLWINDOW.0 as isize)
-                    & !(WS_EX_APPWINDOW.0 as isize),
-            );
-            SetLayeredWindowAttributes(overlay_hwnd, COLORREF(0), 255, LWA_ALPHA).ok();
-        }
-
-        let overlay = UnsafeSend::new(overlay_hwnd);
-
+        // position tracker thread
+        let overlay = UnsafeSend::new(hwnd);
+        let par     = UnsafeSend::new(*parent);
         std::thread::spawn(move || unsafe {
-            let parent_hwnd = *parent;
-            let overlay_hwnd = *overlay;
             loop {
                 let mut rect = RECT::default();
-                if GetWindowRect(parent_hwnd, &mut rect).is_ok() {
+                if GetWindowRect(*par, &mut rect).is_ok() {
                     SetWindowPos(
-                        overlay_hwnd,
+                        *overlay,
                         Some(HWND_TOPMOST),
-                        rect.left,
-                        rect.top,
+                        rect.left, rect.top,
                         rect.right - rect.left,
                         rect.bottom - rect.top,
                         SWP_NOACTIVATE,
@@ -99,241 +323,155 @@ pub fn spawn_imgui_window(parent_hwnd: HWND) {
             }
         });
 
-        // let font_data = std::fs::read("C:\\Windows\\Fonts\\segoeui.ttf")
-        //     .expect("Failed to load system font");
-        debug_print("[glorp] font file read ok");
+        let renderer = OverlayRenderer::new(hwnd).unwrap_or_else(|e| {
+            debug_print(format!("[glorp] D2D init failed: {:?}", e));
+            panic!("D2D init failed");
+        });
+        debug_print("[glorp] D2D renderer ok");
 
-        let mut imgui = imgui::Context::create();
-        debug_print("[glorp] imgui context created");
-        imgui.set_ini_filename(None);
-        imgui::Style::use_light_colors(imgui.style_mut()); 
-        // imgui.style_mut().colors[imgui::StyleColor::Text as usize] =
-        //     [1.0, 1.0, 1.0, 1.0];
-
-
-        // let _font_data_guard = &font_data;
-
-        // imgui.fonts().add_font(&[
-        //     imgui::FontSource::TtfData {
-        //         data: &font_data,
-        //         size_pixels: 20.0,
-        //         config: None,
-        //     }
-        // ]);
-
-        imgui.fonts().add_font(&[imgui::FontSource::DefaultFontData {
-            config: Some(imgui::FontConfig {
-                size_pixels: 24.0,
-                ..Default::default()
-            }),
-        }]);
-
-        {
-            let mut fonts = imgui.fonts();
-            let tex = fonts.build_rgba32_texture();
-            debug_print(format!("[glorp] atlas: {}x{} len={}", tex.width, tex.height, tex.data.len()));
-        }
-
-
-
-        let mut platform = WinitPlatform::init(&mut imgui);
-        platform.attach_window(
-            imgui.io_mut(),
-            display.gl_window().window(),
-            imgui_winit_support::HiDpiMode::Default,
-        );
-
-        let mut renderer = imgui_glium_renderer::Renderer::init(&mut imgui, &display).unwrap();
-        debug_print("[glorp] renderer init ok");
-        let mut last_frame = std::time::Instant::now();
-        let mut last_read = std::time::Instant::now();
         let mut ft_history: VecDeque<f32> = VecDeque::with_capacity(100);
         let mut current_fps = 0.0f32;
-        let mut current_ft = 0.0f32;
+        let mut current_ft  = 0.0f32;
+        let mut last_read   = std::time::Instant::now();
 
-        let mut settings = OverlaySettings::default();
-        let mut show_settings = false;
-
-        event_loop.run(move |event, _, control_flow| {
-            let now = std::time::Instant::now();
-            let _delta = now - last_frame;
-            last_frame = now;
-
-            match &event {
-                Event::WindowEvent { event: WindowEvent::KeyboardInput { input, .. }, .. } => {
-                    // toggle settings window on Page Up key idk
-                    if input.state == glium::glutin::event::ElementState::Pressed {
-                        if let Some(VirtualKeyCode::PageUp) = input.virtual_keycode {
-                            show_settings = !show_settings;
-                        }
-                    }
-                }
-                _ => {}
+        loop {
+            // pump messages
+            let mut msg = MSG::default();
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
             }
 
-            match event {
-                Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
-                    ..
-                } => {
-                    *control_flow = glium::glutin::event_loop::ControlFlow::Exit;
+            if last_read.elapsed() >= std::time::Duration::from_millis(250) {
+                if let Some((fps, ft)) = read_frame_data() {
+                    current_fps = fps;
+                    current_ft  = ft;
+                    ft_history.push_back(ft);
+                    if ft_history.len() > 100 { ft_history.pop_front(); }
                 }
-
-                Event::MainEventsCleared => {
-                    thread_local! {
-                        static FRAME_COUNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-                    }
-                    FRAME_COUNT.with(|c| {
-                        let n = c.get();
-                        if n < 5 {
-                            debug_print(format!("[glorp] frame {n}"));
-                        }
-                        c.set(n + 1);
-                    });
-
-                    // debug_print(format!("[glorp] render ok frame {}", FRAME_COUNT.with(|c| c.get())));
-
-
-                    if last_read.elapsed() >= std::time::Duration::from_millis(250) {
-                        if let Some((fps, ft)) = read_frame_data() {
-                            current_fps = fps;
-                            current_ft = ft;
-                            ft_history.push_back(ft);
-                            if ft_history.len() > 100 {
-                                ft_history.pop_front();
-                            }
-                        }
-                        last_read = std::time::Instant::now();
-                    }
-
-                    platform
-                        .prepare_frame(imgui.io_mut(), display.gl_window().window())
-                        .expect("Failed to prepare frame");
-
-                    let ui = imgui.frame();
-
-                    let (average, low1, low01) = calculate_stats(&ft_history);
-
-                    // --- overlay ---
-                    let _no_bg     = ui.push_style_color(imgui::StyleColor::WindowBg, [30.0, 0.0, 0.0, 0.0]);
-                    let _no_border = ui.push_style_color(imgui::StyleColor::Border,   [0.0, 0.0, 0.0, 0.0]);
-                    let _text      = ui.push_style_color(imgui::StyleColor::Text,      [1.0, 1.0, 1.0, 1.0]);
-
-                    imgui::Window::new("##overlay")
-                        .size([300.0, 300.0], imgui::Condition::Always)
-                        .position([20.0, 20.0], imgui::Condition::Always)
-                        .flags(
-                            imgui::WindowFlags::NO_TITLE_BAR
-                            | imgui::WindowFlags::NO_RESIZE
-                            | imgui::WindowFlags::NO_MOVE
-                            | imgui::WindowFlags::NO_SCROLLBAR
-                            | imgui::WindowFlags::NO_INPUTS
-                            | imgui::WindowFlags::NO_SAVED_SETTINGS,
-                        )
-                        .build(&ui, || {
-                            if settings.show_fps {
-                                let color = if current_fps >= 60.0 {
-                                    [0.0, 1.0, 0.3, 1.0]
-                                } else if current_fps >= 30.0 {
-                                    [1.0, 0.8, 0.0, 1.0]
-                                } else {
-                                    [1.0, 0.2, 0.2, 1.0]
-                                };
-                                let _c = ui.push_style_color(imgui::StyleColor::Text, color);
-                                ui.text(format!("FPS:      {:>6.1}", current_fps));
-                            }
-
-                            if settings.show_frametime {
-                                ui.text(format!("FT:       {:>5.2} ms", current_ft));
-                            }
-
-                            if settings.show_avg {
-                                ui.text(format!("Avg FT:   {:>5.2} ms", average));
-                            }
-
-                            if settings.show_low1 {
-                                ui.text(format!("99th%%:   {:>5.2} ms", low1));
-                            }
-
-                            if settings.show_low01 {
-                                ui.text(format!("99.9th%%: {:>5.2} ms", low01));
-                            }
-                        });
-
-                    drop(_no_bg);
-                    drop(_no_border);
-                    drop(_text);
-
-                    // --- settings window ---
-                    if show_settings {
-                        imgui::Window::new("glorp | settings")
-                            .size([280.0, 240.0], imgui::Condition::Always)
-                            .position([320.0, 150.0], imgui::Condition::FirstUseEver)
-                            .flags(
-                                imgui::WindowFlags::NO_RESIZE
-                                | imgui::WindowFlags::NO_SAVED_SETTINGS,
-                            )
-                            .opened(&mut show_settings)
-                            .build(&ui, || {
-                                ui.text("Overlay metrics");
-                                ui.separator();
-                                ui.checkbox("FPS",               &mut settings.show_fps);
-                                ui.checkbox("Frame time (ms)",   &mut settings.show_frametime);
-                                ui.checkbox("Avg frame time",    &mut settings.show_avg);
-                                ui.checkbox("99th percentile",   &mut settings.show_low1);
-                                ui.checkbox("99.9th percentile", &mut settings.show_low01);
-                                ui.checkbox("Graph",             &mut settings.show_graph);
-                            });
-                    }
-
-                    platform.prepare_render(&ui, display.gl_window().window());
-                    let mut target = display.draw();
-                    target.clear_color_srgb(0.0, 0.0, 0.0, 0.0);
-                    let draw_data = ui.render();
-                    renderer.render(&mut target, draw_data).expect("Render failed");
-                    target.finish().ok();
-                }
-
-                event => {
-                    platform.handle_event(
-                        imgui.io_mut(),
-                        display.gl_window().window(),
-                        &event,
-                    );
-                }
+                last_read = std::time::Instant::now();
             }
-        });
+
+            let (avg, p99, p999) = calculate_stats(&ft_history);
+            let s = OVERLAY_SETTINGS.lock().unwrap();
+
+            if let Err(e) = renderer.render(current_fps, current_ft, avg, p99, p999, &s) {
+                debug_print(format!("[glorp] render error: {:?}", e));
+            }
+            drop(s);
+
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
     });
 }
 
-fn calculate_stats(history: &VecDeque<f32>) -> (f32, f32, f32) {
-    if history.is_empty() {
-        return (0.0, 0.0, 0.0);
-    }
-
-    let mut sorted = history.iter().copied().collect::<Vec<_>>();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    let average = sorted.iter().sum::<f32>() / sorted.len() as f32;
-
-    // 99th and 99.9th percentile frametimes — higher = worse
-    let p99 = sorted[((sorted.len() as f32 * 0.99) as usize).min(sorted.len() - 1)];
-    let p999 = sorted[((sorted.len() as f32 * 0.999) as usize).min(sorted.len() - 1)];
-
-    (average, p99, p999)
+unsafe extern "system" fn overlay_wnd_proc(
+    hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
+) -> LRESULT {
+    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
-use windows::{Win32::System::Memory::*, core::s};
-use crate::utils::UnsafeSend;
+// settings window — plain Win32 dialog
+pub fn spawn_settings_window() {
+    std::thread::spawn(|| unsafe {
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
-pub fn read_frame_data() -> Option<(f32, f32)> {
-    unsafe {
-        let mapping = OpenFileMappingA(FILE_MAP_READ.0, false, s!("GlorpFrameTiming")).ok()?;
-        let ptr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 64);
-        if ptr.Value.is_null() { return None; }
-        let frame_ns = *(ptr.Value as *const u64);
-        let frame_ms = frame_ns as f32 / 1_000_000.0;
-        let fps = 1000.0 / frame_ms.max(0.001);
-        Some((fps, frame_ms))
+        let hinstance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
+        let class_name = w!("glorp_settings");
+
+        let wc = WNDCLASSW {
+            lpfnWndProc:   Some(settings_wnd_proc),
+            hInstance:     hinstance,
+            lpszClassName: class_name,
+            hbrBackground: HBRUSH(CreateSolidBrush(COLORREF(0x1a1a1a)).0),
+            ..Default::default()
+        };
+        RegisterClassW(&wc);
+
+        let hwnd = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            class_name,
+            w!("glorp | settings"),
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+            100, 100, 300, 280,
+            None, None, Some(hinstance), None,
+        ).unwrap();
+
+        // create checkboxes
+        let labels = [
+            (1001u16, w!("FPS")),
+            (1002u16, w!("Frame time (ms)")),
+            (1003u16, w!("Avg frame time")),
+            (1004u16, w!("99th percentile")),
+            (1005u16, w!("99.9th percentile")),
+        ];
+
+        let s = OVERLAY_SETTINGS.lock().unwrap();
+        let states = [s.show_fps, s.show_frametime, s.show_avg, s.show_low1, s.show_low01];
+        drop(s);
+
+        for (i, (id, label)) in labels.iter().enumerate() {
+            let cb = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                *label,
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_CHECKBOX as u32),
+                20,
+                40 + i as i32 * 36,
+                240,
+                28,
+                Some(hwnd),
+                Some(HMENU(*id as *mut _)),
+                Some(hinstance),
+                None,
+            ).unwrap();
+            SendMessageW(cb, BM_SETCHECK, 
+                WPARAM(if states[i] { BST_CHECKED.0 as usize } else { 0 }), 
+                LPARAM(0));
+        }
+
+        SHOW_SETTINGS.store(true, Ordering::Relaxed);
+
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+
+        SHOW_SETTINGS.store(false, Ordering::Relaxed);
+    });
+}
+
+unsafe extern "system" fn settings_wnd_proc(
+    hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_COMMAND => {
+            let id = (wparam.0 & 0xffff) as u16;
+            if (1001..=1005).contains(&id) {
+                let cb = GetDlgItem(hwnd, id as i32);
+                let checked = SendMessageW(cb, BM_GETCHECK, WPARAM(0), LPARAM(0));
+                let now_checked = checked.0 == BST_CHECKED.0 as isize;
+                // toggle
+                SendMessageW(cb, BM_SETCHECK,
+                    WPARAM(if now_checked { 0 } else { BST_CHECKED.0 as usize }),
+                    LPARAM(0));
+                let mut s = OVERLAY_SETTINGS.lock().unwrap();
+                match id {
+                    1001 => s.show_fps       = !now_checked,
+                    1002 => s.show_frametime = !now_checked,
+                    1003 => s.show_avg       = !now_checked,
+                    1004 => s.show_low1      = !now_checked,
+                    1005 => s.show_low01     = !now_checked,
+                    _ => {}
+                }
+            }
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            PostQuitMessage(0);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }

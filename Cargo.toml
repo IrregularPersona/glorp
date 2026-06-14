@@ -22,15 +22,6 @@ opt-level = 3
 debug-assertions = true
 strip = "symbols"
 
-[profile.release.package.imgui-glium-renderer]
-opt-level = 0
-
-[profile.release.package.glium]
-opt-level = 0
-
-[profile.release.package.imgui]
-opt-level = 0
-
 [features]
 packaged = []
 editor-ignore = []
@@ -52,6 +43,11 @@ windows = { version = "0.61.*", features = [
        "Win32_System_Memory",
        "Win32_Foundation",
        "Win32_Graphics_Gdi",
+       "Win32_Graphics_Direct2D",
+       "Win32_Graphics_Direct2D_Common",
+       "Win32_Graphics_DirectWrite",
+       "Win32_Graphics_Gdi",
+       "Win32_Graphics_Dxgi_Common",
        "Win32_Storage_FileSystem",
        "Win32_Security_Authorization",
 ] }
@@ -65,10 +61,6 @@ serde_json = "1.0.*"
 discord-rich-presence = "1.1.*"
 ping-rs = "0.1.*"
 dns-lookup = "3.0.*"
-imgui = "0.8.2"
-imgui-winit-support = "0.8"
-imgui-glium-renderer = "0.8.2"
-glium = "0.30.2"
 
 
 [build-dependencies]
