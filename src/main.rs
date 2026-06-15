@@ -1,9 +1,21 @@
 #![cfg_attr(feature = "packaged", windows_subsystem = "windows")]
+use crate::modules::userscripts;
+use crate::window::WindowState;
+use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
 use std::{
-    env, sync,
+    collections::HashMap,
+    env, fs, io, path, process, result, sync,
     sync::{LazyLock, Mutex},
 };
-use windows::{Win32::UI::WindowsAndMessaging::*, core::*};
+use webview2_com::{Microsoft::Web::WebView2::Win32::*, *};
+use windows::{
+    Win32::{
+        Foundation::{LPARAM, WPARAM},
+        System::Com::IStream,
+        UI::WindowsAndMessaging::*,
+    },
+    core::*,
+};
 
 mod app;
 mod config;
@@ -28,6 +40,7 @@ static SCRIPT_ID: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::
 
 static mut TOKEN: *mut i64 = &mut 0i64 as *mut i64;
 
+#[allow(dead_code)]
 fn init_fs() -> result::Result<(), io::Error> {
     let user_profile = path::PathBuf::from(env::var("USERPROFILE").unwrap());
     let client_dir = user_profile.join("Documents").join("glorp");
@@ -195,9 +208,7 @@ fn set_handlers<T: utils::EnvironmentRef>(webview: &ICoreWebView2, env_wrapper: 
     }
 }
 
-pub fn create_main_window(
-    env: Option<ICoreWebView2Environment>,
-) -> window::Window {
+pub fn create_main_window(env: Option<ICoreWebView2Environment>) -> window::Window {
     let mut webview2_folder: path::PathBuf = env::current_exe().unwrap();
     webview2_folder.pop();
     webview2_folder = webview2_folder.join("WebView2");
@@ -474,7 +485,7 @@ pub fn create_main_window(
 
 fn main() {
     modules::lifecycle::register_instance();
-    
+
     #[cfg(feature = "packaged")]
     {
         modules::lifecycle::set_panic_hook().ok();
@@ -484,7 +495,6 @@ fn main() {
     if let Err(e) = app::init_fs() {
         eprintln!("failed to set all the files in place {}", e);
     }
-
 
     let window = create_main_window(None);
     let (_tx, rx) = sync::mpsc::channel::<String>();
@@ -547,7 +557,8 @@ pub fn read_fps_data() -> Option<u32> {
             windows::Win32::System::Memory::FILE_MAP_READ.0,
             false,
             s!("GlorpFrameTiming"),
-        ).ok()?;
+        )
+        .ok()?;
         let ptr = windows::Win32::System::Memory::MapViewOfFile(
             mapping,
             windows::Win32::System::Memory::FILE_MAP_READ,
@@ -564,4 +575,3 @@ pub fn read_fps_data() -> Option<u32> {
         Some(fps.round() as u32)
     }
 }
-
