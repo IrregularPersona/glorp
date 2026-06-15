@@ -14,7 +14,6 @@ mod window;
 pub mod modules {
     pub mod blocklist;
     pub mod flaglist;
-    pub mod imgui_window;
     pub mod lifecycle;
     pub mod ping;
     pub mod priority;
