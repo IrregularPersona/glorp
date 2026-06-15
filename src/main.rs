@@ -430,6 +430,15 @@ pub fn create_main_window(
                         Some(&"ping") => {
                             modules::ping::ping(&webview);
                         }
+                        Some(&"fps") => {
+                            if let Some(fps) = read_fps_data() {
+                                webview
+                                    .PostWebMessageAsJson(PCWSTR(
+                                        crate::utils::create_utf_string(format!("{{\"fpsInfo\":{}}}", fps)).as_ptr(),
+                                    ))
+                                    .ok();
+                            }
+                        }
                         _ => {}
                     }
 
@@ -485,7 +494,7 @@ fn main() {
 
     let window = create_main_window(None);
     // #[cfg(debug_assertions)]
-    modules::imgui_window::spawn_imgui_window(window.hwnd);
+    // modules::imgui_window::spawn_imgui_window(window.hwnd);
 
     let (_tx, rx) = sync::mpsc::channel::<String>();
     #[cfg(feature = "packaged")]
@@ -530,3 +539,28 @@ fn main() {
 
     CONFIG.lock().unwrap().save();
 }
+
+pub fn read_fps_data() -> Option<u32> {
+    unsafe {
+        let mapping = windows::Win32::System::Memory::OpenFileMappingA(
+            windows::Win32::System::Memory::FILE_MAP_READ.0,
+            false,
+            s!("GlorpFrameTiming"),
+        ).ok()?;
+        let ptr = windows::Win32::System::Memory::MapViewOfFile(
+            mapping,
+            windows::Win32::System::Memory::FILE_MAP_READ,
+            0,
+            0,
+            64,
+        );
+        if ptr.Value.is_null() {
+            return None;
+        }
+        let frame_ns = *(ptr.Value as *const u64);
+        let frame_ms = frame_ns as f32 / 1_000_000.0;
+        let fps = 1000.0 / frame_ms.max(0.001);
+        Some(fps.round() as u32)
+    }
+}
+
